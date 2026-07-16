@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <p class="eyebrow">REVO · Omni</p>
+      <h1>Manifest ingest</h1>
+      <p class="lede">
+        Upload REVO manifesto workbooks. Each sheet becomes a flight; passengers
+        are stored for long-term analytics.
+      </p>
+    </header>
+
+    <section class="stats">
+      <article>
+        <span class="label">Flights</span>
+        <strong id="stat-flights">{{ flights }}</strong>
+      </article>
+      <article>
+        <span class="label">Boardings</span>
+        <strong id="stat-boardings">{{ boardings }}</strong>
+      </article>
+      <article>
+        <span class="label">Unique passengers</span>
+        <strong id="stat-passengers">{{ passengers }}</strong>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Upload workbook</h2>
+      <p class="muted">Accepts <code>.xlsx</code> / <code>.xlsm</code>. Duplicate files and flights are skipped automatically.</p>
+      <form id="upload-form">
+        <label class="drop" id="drop">
+          <input id="file" type="file" accept=".xlsx,.xlsm,.xls" multiple hidden />
+          <span>Drop files here or <u>browse</u></span>
+        </label>
+        <button type="submit" id="submit" disabled>Process uploads</button>
+      </form>
+      <div id="results" class="results" hidden></div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2>Recent uploads</h2>
+        <a class="link" href="/api/exports/boardings.csv">Download boardings CSV</a>
+      </div>
+      {% if uploads %}
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>When</th>
+            <th>Found</th>
+            <th>Inserted</th>
+            <th>Skipped</th>
+            <th>Boardings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in uploads %}
+          <tr>
+            <td>{{ u.filename }}</td>
+            <td>{{ u.uploaded_at }}</td>
+            <td>{{ u.flights_found }}</td>
+            <td>{{ u.flights_inserted }}</td>
+            <td>{{ u.flights_skipped }}</td>
+            <td>{{ u.boardings_inserted }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No uploads yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h2>API for dashboard</h2>
+      <ul class="api">
+        <li><code>GET /api/stats/summary?days=365</code></li>
+        <li><code>GET /api/stats/monthly</code></li>
+        <li><code>GET /api/stats/top-routes?days=365</code></li>
+        <li><code>GET /api/stats/top-passengers?days=365</code></li>
+        <li><code>GET /api/exports/boardings.csv</code></li>
+        <li><code>POST /api/upload</code> (multipart file)</li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
