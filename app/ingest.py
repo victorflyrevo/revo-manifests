@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from app.models import Boarding, Flight, Passenger, UploadBatch
 from app.parser import ParseResult, content_hash, parse_bytes
 
+# Commit periodically so large workbooks (hundreds of sheets) don't hold one giant txn
+COMMIT_EVERY = 50
+
 
 def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
     digest = content_hash(data)
@@ -32,6 +35,7 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
     db.flush()
 
     inserted = skipped = boardings = 0
+    since_commit = 0
 
     for fl in parsed.flights:
         prior = db.scalar(select(Flight.id).where(Flight.fingerprint == fl.fingerprint))
@@ -102,13 +106,24 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
             boardings += 1
 
         flight.pax_count = len(seen_on_flight)
-        db.flush()
+        since_commit += 1
+        if since_commit >= COMMIT_EVERY:
+            batch.flights_inserted = inserted
+            batch.flights_skipped = skipped
+            batch.boardings_inserted = boardings
+            db.commit()
+            # re-attach batch after commit
+            batch = db.get(UploadBatch, batch.id)  # type: ignore[assignment]
+            since_commit = 0
 
     batch.flights_inserted = inserted
     batch.flights_skipped = skipped
     batch.boardings_inserted = boardings
     batch.status = "processed"
-    batch.notes = f"Skipped template sheets: {parsed.skipped_sheets}"
+    batch.notes = (
+        f"Processed all {len(parsed.flights)} flight sheets; "
+        f"skipped {parsed.skipped_sheets} template sheet(s)."
+    )
     db.commit()
     db.refresh(batch)
     return batch

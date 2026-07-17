@@ -6,7 +6,8 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./data/revo.db"
     app_title: str = "REVO Manifest Ingest"
-    max_upload_mb: int = 50
+    # 0 = no size limit (process every sheet in every uploaded workbook)
+    max_upload_mb: int = 0
 
 
 settings = Settings()

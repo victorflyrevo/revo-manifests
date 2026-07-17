@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -12,11 +13,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db import get_db, init_db
+from app.db import SessionLocal, get_db, init_db
 from app.ingest import ingest_workbook
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# Large workbooks (400+ sheets) need a dedicated worker, no sheet count cap
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ingest")
 
 app = FastAPI(title=settings.app_title)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -27,6 +31,14 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 def on_startup() -> None:
     Path("data").mkdir(exist_ok=True)
     init_db()
+
+
+def _ingest_in_thread(data: bytes, filename: str) -> UploadBatch:
+    db = SessionLocal()
+    try:
+        return ingest_workbook(db, data, filename)
+    finally:
+        db.close()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -59,8 +71,8 @@ def health() -> dict:
 @app.post("/api/upload")
 async def upload_manifest(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
 ) -> JSONResponse:
+    """Accept one workbook and process every flight sheet (no sheet-count limit)."""
     if not file.filename:
         raise HTTPException(400, "Missing filename")
     lower = file.filename.lower()
@@ -68,12 +80,16 @@ async def upload_manifest(
         raise HTTPException(400, "Only Excel files (.xlsx) are supported")
 
     data = await file.read()
-    max_bytes = settings.max_upload_mb * 1024 * 1024
-    if len(data) > max_bytes:
-        raise HTTPException(400, f"File exceeds {settings.max_upload_mb} MB")
+    if settings.max_upload_mb > 0:
+        max_bytes = settings.max_upload_mb * 1024 * 1024
+        if len(data) > max_bytes:
+            raise HTTPException(400, f"File exceeds {settings.max_upload_mb} MB")
 
+    loop = asyncio.get_running_loop()
     try:
-        batch = ingest_workbook(db, data, file.filename)
+        batch = await loop.run_in_executor(
+            _executor, _ingest_in_thread, data, file.filename
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"Failed to parse workbook: {exc}") from exc
 
@@ -89,6 +105,77 @@ async def upload_manifest(
             "notes": batch.notes,
             "already_ingested": batch.flights_inserted == 0
             and "already ingested" in (batch.notes or "").lower(),
+        }
+    )
+
+
+@app.post("/api/upload/batch")
+async def upload_manifests_batch(
+    files: list[UploadFile] = File(...),
+) -> JSONResponse:
+    """Upload many workbooks at once; each is fully processed, all sheets included."""
+    if not files:
+        raise HTTPException(400, "No files provided")
+
+    results = []
+    for file in files:
+        if not file.filename or not file.filename.lower().endswith(
+            (".xlsx", ".xlsm", ".xls")
+        ):
+            results.append(
+                {
+                    "filename": file.filename or "(unknown)",
+                    "status": "error",
+                    "error": "Only Excel files (.xlsx) are supported",
+                }
+            )
+            continue
+
+        data = await file.read()
+        if settings.max_upload_mb > 0:
+            max_bytes = settings.max_upload_mb * 1024 * 1024
+            if len(data) > max_bytes:
+                results.append(
+                    {
+                        "filename": file.filename,
+                        "status": "error",
+                        "error": f"File exceeds {settings.max_upload_mb} MB",
+                    }
+                )
+                continue
+
+        loop = asyncio.get_running_loop()
+        try:
+            batch = await loop.run_in_executor(
+                _executor, _ingest_in_thread, data, file.filename
+            )
+            results.append(
+                {
+                    "filename": batch.filename,
+                    "status": batch.status,
+                    "flights_found": batch.flights_found,
+                    "flights_inserted": batch.flights_inserted,
+                    "flights_skipped": batch.flights_skipped,
+                    "boardings_inserted": batch.boardings_inserted,
+                    "notes": batch.notes,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            results.append(
+                {
+                    "filename": file.filename,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
+
+    ok = sum(1 for r in results if r.get("status") != "error")
+    return JSONResponse(
+        {
+            "files_total": len(results),
+            "files_ok": ok,
+            "files_error": len(results) - ok,
+            "results": results,
         }
     )
 
