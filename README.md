@@ -45,15 +45,36 @@ Optional env vars:
 - `MAX_UPLOAD_MB` — default `50`  
 - `PORT` — Railway injects this  
 
-## API for a future dashboard
+## Report API (`/api/v1`)
 
-- `GET /api/stats/summary?days=365`  
-- `GET /api/stats/monthly`  
-- `GET /api/stats/top-routes?days=365`  
-- `GET /api/stats/top-passengers?days=365`  
-- `GET /api/exports/boardings.csv`  
-- `POST /api/upload` — multipart field `file`  
+Read-only JSON API for external reports/dashboards. Interactive docs: `/docs`.
+
+Auth: set env `API_KEY` and send header `X-API-Key: <key>` on every request.
+If `API_KEY` is empty (local default), the API is open.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/summary?days=365` | KPI window (or `start_date` / `end_date`) |
+| `GET /api/v1/monthly` | Boardings / flights / uniques by month |
+| `GET /api/v1/routes` | Top OD routes |
+| `GET /api/v1/passengers/top` | Most frequent passengers |
+| `GET /api/v1/flights` | Paginated flights (`limit`, `offset`, filters) |
+| `GET /api/v1/boardings` | Paginated boardings |
+| `GET /api/v1/passengers?q=` | Search passengers |
+| `GET /api/v1/uploads` | Recent ingest batches |
+| `GET /api/v1/export/boardings.csv` | Full CSV export |
+
+Example:
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "https://YOUR-APP.up.railway.app/api/v1/summary?days=365"
+```
+
+Legacy aliases still work under `/api/stats/*` (no key required for now).
+
+Upload: `POST /api/upload` (multipart field `file`).
 
 ## Security note
 
-This MVP has **no auth**. Before sharing publicly, add Railway private networking, basic auth, or SSO. For internal use, keep the Railway URL private or protect with Railway’s auth / Cloudflare Access.
+Set `API_KEY` on Railway for the report API. Keep the upload UI URL private or add further auth if the app is public.

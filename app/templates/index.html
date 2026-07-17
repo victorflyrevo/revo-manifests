@@ -91,14 +91,22 @@
     </section>
 
     <section class="card">
-      <h2>API for dashboard</h2>
+      <h2>Report API <code>/api/v1</code></h2>
+      <p class="muted">
+        Use these endpoints from another report/dashboard. Send header
+        <code>X-API-Key</code> when <code>API_KEY</code> is configured on Railway.
+        Interactive docs: <a class="link" href="/docs">/docs</a>
+      </p>
       <ul class="api">
-        <li><code>GET /api/stats/summary?days=365</code></li>
-        <li><code>GET /api/stats/monthly</code></li>
-        <li><code>GET /api/stats/top-routes?days=365</code></li>
-        <li><code>GET /api/stats/top-passengers?days=365</code></li>
-        <li><code>GET /api/exports/boardings.csv</code></li>
-        <li><code>POST /api/upload</code> (multipart file)</li>
+        <li><code>GET /api/v1/summary?days=365</code></li>
+        <li><code>GET /api/v1/monthly</code></li>
+        <li><code>GET /api/v1/routes?days=365</code></li>
+        <li><code>GET /api/v1/passengers/top?days=365</code></li>
+        <li><code>GET /api/v1/flights?start_date=2025-07-01&amp;end_date=2026-07-01</code></li>
+        <li><code>GET /api/v1/boardings?limit=100&amp;offset=0</code></li>
+        <li><code>GET /api/v1/passengers?q=silva</code></li>
+        <li><code>GET /api/v1/export/boardings.csv</code></li>
+        <li><code>POST /api/upload</code> (multipart file — ingest UI)</li>
       </ul>
     </section>
   </main>

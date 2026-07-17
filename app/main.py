@@ -6,12 +6,14 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api_report import router as report_router
 from app.config import settings
 from app.db import SessionLocal, get_db, init_db
 from app.ingest import ingest_workbook
@@ -22,7 +24,19 @@ BASE_DIR = Path(__file__).resolve().parent
 # Large workbooks (400+ sheets) need a dedicated worker, no sheet count cap
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ingest")
 
-app = FastAPI(title=settings.app_title)
+app = FastAPI(
+    title=settings.app_title,
+    description="Upload REVO manifests and expose a read API for external reports.",
+)
+_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(report_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
