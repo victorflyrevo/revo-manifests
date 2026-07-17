@@ -41,8 +41,15 @@
       <form id="upload-form">
         <label class="drop" id="drop">
           <input id="file" type="file" accept=".xlsx,.xlsm,.xls" multiple hidden />
-          <span>Drop files here or <u>browse</u></span>
+          <span id="drop-label">Drop files here or <u>browse</u></span>
         </label>
+        <div id="selected" class="selected" hidden>
+          <div class="selected-head">
+            <strong id="selected-count">0 files selected</strong>
+            <button type="button" class="linkish" id="clear-files">Clear</button>
+          </div>
+          <ul id="file-list" class="file-list"></ul>
+        </div>
         <button type="submit" id="submit" disabled>Process uploads</button>
       </form>
       <div id="results" class="results" hidden></div>
