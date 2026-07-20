@@ -11,6 +11,32 @@
   --display: "IBM Plex Serif", Georgia, serif;
 }
 
+.login-form label {
+  display: block;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.login-form input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #121814;
+  color: var(--ink);
+  font: inherit;
+}
+.err-banner {
+  background: rgba(217, 123, 108, 0.15);
+  border: 1px solid var(--err);
+  color: var(--err);
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin: 0 0 14px;
+}
+
 * { box-sizing: border-box; }
 body {
   margin: 0;

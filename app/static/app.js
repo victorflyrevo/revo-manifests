@@ -145,7 +145,15 @@ form.addEventListener("submit", async (e) => {
     try {
       const body = new FormData();
       body.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body });
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+      });
+      if (res.status === 401) {
+        location.href = "/login";
+        return;
+      }
       let data = null;
       try {
         data = await res.json();
@@ -186,7 +194,13 @@ async function refreshUploadLog() {
   const root = document.getElementById("upload-log");
   if (!root) return;
   try {
-    const res = await fetch("/api/uploads/recent?limit=30");
+    const res = await fetch("/api/uploads/recent?limit=30", {
+      credentials: "same-origin",
+    });
+    if (res.status === 401) {
+      location.href = "/login";
+      return;
+    }
     if (!res.ok) return;
     const data = await res.json();
     const uploads = data.uploads || [];

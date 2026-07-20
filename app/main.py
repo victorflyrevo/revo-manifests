@@ -6,15 +6,23 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+import httpx
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api_report import router as report_router
+from app.auth import (
+    COOKIE_NAME,
+    identity_enabled,
+    optional_identity,
+    require_identity,
+    require_uploader,
+)
 from app.config import settings
 from app.db import SessionLocal, get_db, init_db
 from app.ingest import ingest_workbook
@@ -90,8 +98,145 @@ def _ingest_in_thread(data: bytes, filename: str) -> UploadBatch:
         db.close()
 
 
+def _forgot_password_url() -> str:
+    issuer = (settings.identity_issuer_url or "").rstrip("/")
+    return f"{issuer}/forgot-password" if issuer else "#"
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request) -> HTMLResponse:
+    claims = optional_identity(
+        request,
+        request.headers.get("authorization"),
+        request.cookies.get(COOKIE_NAME),
+    )
+    if claims is not None:
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "title": settings.app_title,
+            "error": None,
+            "forgot_password_url": _forgot_password_url(),
+        },
+    )
+
+
+@app.post("/login")
+async def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+) -> HTMLResponse:
+    issuer = (settings.identity_issuer_url or "").rstrip("/")
+    client_id = (settings.identity_client_id or "").strip() or "revo-manifests"
+    if not issuer:
+        return templates.TemplateResponse(
+            "login.html",
+            {
+                "request": request,
+                "title": settings.app_title,
+                "error": "IDENTITY_ISSUER_URL não configurada",
+                "forgot_password_url": _forgot_password_url(),
+            },
+            status_code=503,
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(
+                f"{issuer}/v1/auth/login",
+                json={
+                    "username": username.strip(),
+                    "password": password,
+                    "client_id": client_id,
+                },
+            )
+        data = res.json() if res.content else {}
+    except Exception as exc:  # noqa: BLE001
+        return templates.TemplateResponse(
+            "login.html",
+            {
+                "request": request,
+                "title": settings.app_title,
+                "error": f"Falha ao contactar Identity: {exc}",
+                "forgot_password_url": _forgot_password_url(),
+            },
+            status_code=502,
+        )
+
+    if res.status_code >= 400:
+        detail = data.get("detail") if isinstance(data, dict) else None
+        if isinstance(detail, list):
+            detail = "; ".join(
+                str(d.get("msg", d)) if isinstance(d, dict) else str(d) for d in detail
+            )
+        return templates.TemplateResponse(
+            "login.html",
+            {
+                "request": request,
+                "title": settings.app_title,
+                "error": detail or "Usuário ou senha inválidos",
+                "forgot_password_url": _forgot_password_url(),
+            },
+            status_code=401,
+        )
+
+    access = data.get("access_token")
+    if not access:
+        return templates.TemplateResponse(
+            "login.html",
+            {
+                "request": request,
+                "title": settings.app_title,
+                "error": "Resposta de login sem access_token",
+                "forgot_password_url": _forgot_password_url(),
+            },
+            status_code=502,
+        )
+
+    resp = RedirectResponse(url="/", status_code=303)
+    resp.set_cookie(
+        key=COOKIE_NAME,
+        value=access,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=int(data.get("expires_in") or 600),
+        path="/",
+    )
+    refresh = data.get("refresh_token")
+    if refresh:
+        resp.set_cookie(
+            key="revo_refresh",
+            value=refresh,
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https",
+            max_age=60 * 60 * 24 * 30,
+            path="/",
+        )
+    return resp
+
+
+@app.post("/logout")
+@app.get("/logout")
+def logout() -> RedirectResponse:
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(COOKIE_NAME, path="/")
+    resp.delete_cookie("revo_refresh", path="/")
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def home(
+    request: Request,
+    db: Session = Depends(get_db),
+    claims: dict = Depends(optional_identity),
+):
+    if identity_enabled() and claims is None:
+        return RedirectResponse(url="/login", status_code=303)
     flights = db.scalar(select(func.count()).select_from(Flight)) or 0
     boardings = db.scalar(select(func.count()).select_from(Boarding)) or 0
     passengers = db.scalar(select(func.count()).select_from(Passenger)) or 0
@@ -110,7 +255,11 @@ def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 
 
 @app.get("/api/uploads/recent")
-def api_recent_uploads(db: Session = Depends(get_db), limit: int = 30) -> JSONResponse:
+def api_recent_uploads(
+    db: Session = Depends(get_db),
+    limit: int = 30,
+    _claims: dict = Depends(require_identity),
+) -> JSONResponse:
     limit = max(1, min(limit, 100))
     return JSONResponse(
         {"uploads": [serialize_upload(u) for u in recent_uploads(db, limit=limit)]}
@@ -119,12 +268,13 @@ def api_recent_uploads(db: Session = Depends(get_db), limit: int = 30) -> JSONRe
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True}
+    return {"ok": True, "identity": identity_enabled()}
 
 
 @app.post("/api/upload")
 async def upload_manifest(
     file: UploadFile = File(...),
+    _claims: dict = Depends(require_uploader),
 ) -> JSONResponse:
     """Accept one workbook and process every flight sheet (no sheet-count limit)."""
     if not file.filename:
@@ -166,6 +316,7 @@ async def upload_manifest(
 @app.post("/api/upload/batch")
 async def upload_manifests_batch(
     files: list[UploadFile] = File(...),
+    _claims: dict = Depends(require_uploader),
 ) -> JSONResponse:
     """Upload many workbooks at once; each is fully processed, all sheets included."""
     if not files:
