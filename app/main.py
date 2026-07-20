@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,40 @@ from app.ingest import ingest_workbook
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
 BASE_DIR = Path(__file__).resolve().parent
+BR_TZ = ZoneInfo("America/Sao_Paulo")
+
+
+def _local_upload_dt(uploaded_at: datetime) -> datetime:
+    dt = uploaded_at
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(BR_TZ)
+
+
+def serialize_upload(batch: UploadBatch) -> dict:
+    local = _local_upload_dt(batch.uploaded_at)
+    return {
+        "id": batch.id,
+        "filename": batch.filename,
+        "status": batch.status,
+        "day": local.strftime("%d/%m/%Y"),
+        "time": local.strftime("%H:%M:%S"),
+        "when_label": local.strftime("%d/%m/%Y às %H:%M"),
+        "flights_found": batch.flights_found,
+        "flights_inserted": batch.flights_inserted,
+        "flights_skipped": batch.flights_skipped,
+        "boardings_inserted": batch.boardings_inserted,
+        "notes": batch.notes,
+        "uploaded_at": local.isoformat(),
+    }
+
+
+def recent_uploads(db: Session, limit: int = 30) -> list[UploadBatch]:
+    return list(
+        db.scalars(
+            select(UploadBatch).order_by(UploadBatch.uploaded_at.desc()).limit(limit)
+        ).all()
+    )
 
 # Large workbooks (400+ sheets) need a dedicated worker, no sheet count cap
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ingest")
@@ -60,10 +95,7 @@ def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     flights = db.scalar(select(func.count()).select_from(Flight)) or 0
     boardings = db.scalar(select(func.count()).select_from(Boarding)) or 0
     passengers = db.scalar(select(func.count()).select_from(Passenger)) or 0
-    uploads = (
-        db.scalars(select(UploadBatch).order_by(UploadBatch.uploaded_at.desc()).limit(20))
-        .all()
-    )
+    uploads = [serialize_upload(u) for u in recent_uploads(db, limit=30)]
     return templates.TemplateResponse(
         "index.html",
         {
@@ -74,6 +106,14 @@ def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "uploads": uploads,
             "title": settings.app_title,
         },
+    )
+
+
+@app.get("/api/uploads/recent")
+def api_recent_uploads(db: Session = Depends(get_db), limit: int = 30) -> JSONResponse:
+    limit = max(1, min(limit, 100))
+    return JSONResponse(
+        {"uploads": [serialize_upload(u) for u in recent_uploads(db, limit=limit)]}
     )
 
 

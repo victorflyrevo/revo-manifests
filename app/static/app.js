@@ -178,7 +178,45 @@ form.addEventListener("submit", async (e) => {
   submit.textContent = `Done — ${ok} ok, ${fail} failed of ${total}`;
   submit.disabled = false;
 
-  setTimeout(() => location.reload(), 2000);
+  await refreshUploadLog();
+  setTimeout(() => location.reload(), 1500);
 });
 
+async function refreshUploadLog() {
+  const root = document.getElementById("upload-log");
+  if (!root) return;
+  try {
+    const res = await fetch("/api/uploads/recent?limit=30");
+    if (!res.ok) return;
+    const data = await res.json();
+    const uploads = data.uploads || [];
+    if (!uploads.length) {
+      root.innerHTML = `<p class="muted" id="upload-log-empty">Nenhum upload ainda.</p>`;
+      return;
+    }
+    root.innerHTML = `<ul class="upload-log-list">${uploads
+      .map(
+        (u) => `
+      <li>
+        <div class="upload-when">
+          <span class="upload-day">${u.day}</span>
+          <span class="upload-time">${u.time}</span>
+        </div>
+        <div class="upload-body">
+          <strong class="upload-file" title="${String(u.filename).replace(/"/g, "&quot;")}">${u.filename}</strong>
+          <span class="upload-meta">
+            ${u.flights_inserted} voos · ${u.boardings_inserted} pax${
+              u.flights_skipped ? ` · ${u.flights_skipped} ignorados` : ""
+            }
+          </span>
+        </div>
+      </li>`
+      )
+      .join("")}</ul>`;
+  } catch (_) {
+    /* ignore refresh errors */
+  }
+}
+
 renderSelectedFiles();
+refreshUploadLog();

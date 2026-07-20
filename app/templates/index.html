@@ -55,39 +55,35 @@
       <div id="results" class="results" hidden></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="upload-log-card">
       <div class="row">
-        <h2>Recent uploads</h2>
+        <h2>Log de uploads</h2>
         <a class="link" href="/api/exports/boardings.csv">Download boardings CSV</a>
       </div>
-      {% if uploads %}
-      <table>
-        <thead>
-          <tr>
-            <th>File</th>
-            <th>When</th>
-            <th>Found</th>
-            <th>Inserted</th>
-            <th>Skipped</th>
-            <th>Boardings</th>
-          </tr>
-        </thead>
-        <tbody>
+      <p class="muted">Últimos arquivos processados (horário de Brasília).</p>
+      <div id="upload-log" class="upload-log" {% if not uploads %}data-empty="1"{% endif %}>
+        {% if uploads %}
+        <ul class="upload-log-list">
           {% for u in uploads %}
-          <tr>
-            <td>{{ u.filename }}</td>
-            <td>{{ u.uploaded_at }}</td>
-            <td>{{ u.flights_found }}</td>
-            <td>{{ u.flights_inserted }}</td>
-            <td>{{ u.flights_skipped }}</td>
-            <td>{{ u.boardings_inserted }}</td>
-          </tr>
+          <li>
+            <div class="upload-when">
+              <span class="upload-day">{{ u.day }}</span>
+              <span class="upload-time">{{ u.time }}</span>
+            </div>
+            <div class="upload-body">
+              <strong class="upload-file" title="{{ u.filename }}">{{ u.filename }}</strong>
+              <span class="upload-meta">
+                {{ u.flights_inserted }} voos · {{ u.boardings_inserted }} pax
+                {% if u.flights_skipped %} · {{ u.flights_skipped }} ignorados{% endif %}
+              </span>
+            </div>
+          </li>
           {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p class="muted">No uploads yet.</p>
-      {% endif %}
+        </ul>
+        {% else %}
+        <p class="muted" id="upload-log-empty">Nenhum upload ainda.</p>
+        {% endif %}
+      </div>
     </section>
 
     <section class="card">
