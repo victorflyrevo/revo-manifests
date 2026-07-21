@@ -251,8 +251,8 @@ async def revo_apps(request: Request) -> JSONResponse:
     return JSONResponse(data, status_code=res.status_code)
 
 
-@app.get("/revo/launch")
-async def revo_launch(request: Request, client_id: str = "") -> RedirectResponse | JSONResponse:
+@app.get("/revo/launch", response_model=None)
+async def revo_launch(request: Request, client_id: str = ""):
     issuer = (settings.identity_issuer_url or "").rstrip("/")
     token = _identity_bearer(request)
     if not issuer or not token:
