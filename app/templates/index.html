@@ -5,8 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
   <link rel="stylesheet" href="/static/styles.css" />
+  {% if show_revo_bar and identity_url %}
+  <link rel="stylesheet" href="{{ identity_url }}/static/revo-bar.css" />
+  {% endif %}
 </head>
 <body>
+  {% if show_revo_bar and identity_url %}
+  <div id="revo-bar" data-client="{{ identity_client_id }}"></div>
+  <script src="{{ identity_url }}/static/revo-bar.js"></script>
+  {% endif %}
   <main class="wrap">
     <header class="hero">
       <p class="eyebrow">REVO · Omni</p>

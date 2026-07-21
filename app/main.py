@@ -229,6 +229,96 @@ def logout() -> RedirectResponse:
     return resp
 
 
+def _identity_bearer(request: Request) -> str | None:
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.cookies.get(COOKIE_NAME)
+
+
+@app.get("/revo/apps")
+async def revo_apps(request: Request) -> JSONResponse:
+    issuer = (settings.identity_issuer_url or "").rstrip("/")
+    token = _identity_bearer(request)
+    if not issuer or not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        res = await client.get(
+            f"{issuer}/v1/auth/my-apps",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    data = res.json() if res.content else {}
+    return JSONResponse(data, status_code=res.status_code)
+
+
+@app.get("/revo/launch")
+async def revo_launch(request: Request, client_id: str = "") -> RedirectResponse | JSONResponse:
+    issuer = (settings.identity_issuer_url or "").rstrip("/")
+    token = _identity_bearer(request)
+    if not issuer or not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not client_id.strip():
+        raise HTTPException(status_code=400, detail="client_id required")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        res = await client.post(
+            f"{issuer}/v1/auth/sso-ticket",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"target_client_id": client_id.strip()},
+        )
+    data = res.json() if res.content else {}
+    if res.status_code >= 400:
+        return JSONResponse(data, status_code=res.status_code)
+    accept = (request.headers.get("accept") or "").lower()
+    if "application/json" in accept:
+        return JSONResponse(
+            {
+                "launch_url": data.get("launch_url"),
+                "target_client_id": data.get("target_client_id"),
+            }
+        )
+    return RedirectResponse(url=data["launch_url"], status_code=302)
+
+
+@app.get("/auth/sso")
+async def auth_sso(request: Request, ticket: str = "") -> RedirectResponse:
+    issuer = (settings.identity_issuer_url or "").rstrip("/")
+    client_id = (settings.identity_client_id or "").strip() or "revo-manifests"
+    if not issuer or not ticket:
+        return RedirectResponse(url="/login", status_code=303)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        res = await client.post(
+            f"{issuer}/v1/auth/sso-exchange",
+            json={"ticket": ticket, "client_id": client_id},
+        )
+    data = res.json() if res.content else {}
+    if res.status_code >= 400 or not data.get("access_token"):
+        return RedirectResponse(url="/login", status_code=303)
+    resp = RedirectResponse(url="/", status_code=303)
+    resp.set_cookie(
+        key=COOKIE_NAME,
+        value=data["access_token"],
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=int(data.get("expires_in") or 600),
+        path="/",
+    )
+    if data.get("refresh_token"):
+        resp.set_cookie(
+            key="revo_refresh",
+            value=data["refresh_token"],
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https",
+            max_age=60 * 60 * 24 * 30,
+            path="/",
+        )
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(
     request: Request,
@@ -241,6 +331,7 @@ def home(
     boardings = db.scalar(select(func.count()).select_from(Boarding)) or 0
     passengers = db.scalar(select(func.count()).select_from(Passenger)) or 0
     uploads = [serialize_upload(u) for u in recent_uploads(db, limit=30)]
+    issuer = (settings.identity_issuer_url or "").rstrip("/")
     return templates.TemplateResponse(
         "index.html",
         {
@@ -250,6 +341,9 @@ def home(
             "passengers": passengers,
             "uploads": uploads,
             "title": settings.app_title,
+            "identity_url": issuer,
+            "identity_client_id": (settings.identity_client_id or "revo-manifests").strip(),
+            "show_revo_bar": bool(issuer and claims is not None),
         },
     )
 
