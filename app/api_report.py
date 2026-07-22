@@ -18,6 +18,7 @@ from app.corrections import (
 )
 from app.dedupe import repair_near_duplicate_flights, run_hygiene_protocol
 from app.identity import repair_merge_split_identities
+from app.missions import count_missions, legs_from_flight_rows, missions_by_month
 from app.db import get_db
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
@@ -207,7 +208,7 @@ def summary(
     start, end = _window(start_date, end_date, days if days is not None else 365)
     assert start is not None and end is not None
 
-    flights = (
+    flight_legs = (
         db.scalar(
             select(func.count())
             .select_from(Flight)
@@ -215,6 +216,14 @@ def summary(
         )
         or 0
     )
+    flight_rows = list(
+        db.scalars(
+            select(Flight).where(
+                Flight.flight_date >= start, Flight.flight_date <= end
+            )
+        ).all()
+    )
+    missions = count_missions(legs_from_flight_rows(flight_rows))
     boardings = (
         db.scalar(
             select(func.count())
@@ -243,13 +252,18 @@ def summary(
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
-        "flights": flights,
+        # Primary flight metric = Sigtrip-style missions (connected same-day chains).
+        "flights": missions,
+        "missions": missions,
+        "flight_legs": flight_legs,
+        "flight_count_unit": "mission",
         "boardings": boardings,
         "unique_passengers": unique,
         "recurring_passengers": recurring,
         "one_time_passengers": max(unique - recurring, 0),
         "recurrence_rate_pct": round((recurring / unique * 100), 1) if unique else 0.0,
-        "avg_pax_per_flight": round(boardings / flights, 2) if flights else 0.0,
+        "avg_pax_per_flight": round(boardings / missions, 2) if missions else 0.0,
+        "avg_pax_per_leg": round(boardings / flight_legs, 2) if flight_legs else 0.0,
     }
 
 
@@ -265,7 +279,7 @@ def monthly(db: Session = Depends(get_db)) -> list[dict]:
         select(
             month_expr.label("month"),
             func.count(Boarding.id).label("boardings"),
-            func.count(func.distinct(Boarding.flight_id)).label("flights"),
+            func.count(func.distinct(Boarding.flight_id)).label("flight_legs"),
             func.count(func.distinct(Boarding.passenger_id)).label("unique_passengers"),
         )
         .where(Boarding.flight_date.is_not(None))
@@ -273,11 +287,17 @@ def monthly(db: Session = Depends(get_db)) -> list[dict]:
         .order_by(month_expr)
     ).all()
 
+    mission_month = missions_by_month(
+        legs_from_flight_rows(db.scalars(select(Flight)).all())
+    )
+
     return [
         {
             "month": r.month,
             "boardings": r.boardings,
-            "flights": r.flights,
+            "flights": mission_month.get(r.month, 0),
+            "missions": mission_month.get(r.month, 0),
+            "flight_legs": r.flight_legs,
             "unique_passengers": r.unique_passengers,
         }
         for r in rows
