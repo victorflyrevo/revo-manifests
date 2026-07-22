@@ -135,14 +135,34 @@ def norm_doc(s: Any) -> Optional[str]:
     return digits if len(digits) >= 4 else None
 
 
+# Must fit flights.origin_code / dest_code (VARCHAR(8))
+AIRPORT_CODE_MAX = 8
+
+
 def airport_code(s: Any) -> Optional[str]:
+    """Extract a short airport/helipad code from a free-text origin/destination.
+
+    Examples:
+      "SDXQ - International Plaza" → "SDXQ"
+      "ZCAPS - Joaquim Egídio" → "ZCAPS"
+      "SBSP" → "SBSP"
+    """
     if s is None:
         return None
     text = str(s).strip()
     if not text:
         return None
-    m = re.match(r"^([A-Z0-9]{3,4})\b", text.upper())
-    return m.group(1) if m else text[:32]
+    upper = text.upper()
+    # ICAO (4), local helipads (4–5), and similar leading tokens up to DB width
+    m = re.match(r"^([A-Z0-9]{3,8})\b", upper)
+    if m:
+        return m.group(1)[:AIRPORT_CODE_MAX]
+    # Fallback: first token before separators, never longer than the column
+    token = re.split(r"[\s\-–—|/]+", upper, maxsplit=1)[0]
+    token = re.sub(r"[^A-Z0-9]", "", token)
+    if len(token) >= 3:
+        return token[:AIRPORT_CODE_MAX]
+    return None
 
 
 def identity_key(name: str, document: Any) -> tuple[str, Optional[str]]:

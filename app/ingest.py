@@ -5,7 +5,16 @@ from sqlalchemy.orm import Session
 
 from app.corrections import annotate_gap_hint
 from app.models import Boarding, Flight, Passenger, UploadBatch
-from app.parser import ParseResult, content_hash, parse_bytes
+from app.parser import AIRPORT_CODE_MAX, ParseResult, content_hash, parse_bytes
+
+
+def _clip_code(value: str | None, max_len: int = AIRPORT_CODE_MAX) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_len]
 
 # Commit periodically so large workbooks (hundreds of sheets) don't hold one giant txn
 COMMIT_EVERY = 50
@@ -44,19 +53,21 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
             skipped += 1
             continue
 
+        origin_code = _clip_code(fl.origin_code)
+        dest_code = _clip_code(fl.dest_code)
         flight = Flight(
             upload_id=batch.id,
             fingerprint=fl.fingerprint,
             source_file=filename,
-            sheet_name=fl.sheet_name,
+            sheet_name=fl.sheet_name[:255] if fl.sheet_name else fl.sheet_name,
             flight_date=fl.flight_date,
-            flight_time=fl.flight_time,
-            origin=fl.origin,
-            destination=fl.destination,
-            origin_code=fl.origin_code,
-            dest_code=fl.dest_code,
-            aircraft_reg=fl.aircraft_reg,
-            aircraft_code=fl.aircraft_code,
+            flight_time=(fl.flight_time or "")[:16] or None,
+            origin=(fl.origin or "")[:255] or None,
+            destination=(fl.destination or "")[:255] or None,
+            origin_code=origin_code,
+            dest_code=dest_code,
+            aircraft_reg=(fl.aircraft_reg or "")[:32] or None,
+            aircraft_code=(fl.aircraft_code or "")[:16] or None,
             pax_count=len(fl.passengers),
         )
         db.add(flight)
@@ -97,10 +108,10 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
                     flight_id=flight.id,
                     passenger_id=passenger.id,
                     flight_date=fl.flight_date,
-                    passenger_name_raw=pax.name,
-                    document_raw=pax.document,
-                    origin_code=fl.origin_code,
-                    dest_code=fl.dest_code,
+                    passenger_name_raw=pax.name[:512],
+                    document_raw=(pax.document or "")[:255] or None,
+                    origin_code=origin_code,
+                    dest_code=dest_code,
                 )
             )
             passenger.total_boardings = (passenger.total_boardings or 0) + 1
