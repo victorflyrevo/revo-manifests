@@ -130,12 +130,16 @@ def strip_sheet_prefix(sheet_name: str) -> str:
 
 
 def is_skippable_sheet(sheet_name: str) -> bool:
-    """True for templates and cancelled flight tabs."""
+    """True for templates and cancelled flight tabs.
+
+    Matches Cancelado as prefix, suffix, or parenthetical — including truncated
+    Excel tab names like ``… CANCELAD`` / ``… CANCELA``.
+    """
     folded = _fold(sheet_name)
     if any(folded.startswith(p) for p in SKIP_SHEET_PREFIXES):
         return True
-    # e.g. "Cópia de Cancelado 0101 …"
-    return bool(re.search(r"\bcancel(?:ad[oa]s?|l?ed)\b", folded))
+    # "Cancelado 0101…", "0108 … (CANCELADO)", "… CANCELADO !", "… CANCELAD"
+    return bool(re.search(r"\bcancel", folded))
 
 
 def extract_sheet_ddmm(sheet_name: str) -> Optional[tuple[int, int]]:
