@@ -45,7 +45,12 @@
     <section class="card" id="customer-kpis">
       <div class="row">
         <h2>Customer KPIs · last 12 months</h2>
-        <span class="muted" id="kpi-range">Loading…</span>
+        <div class="kpi-actions">
+          <span class="muted" id="kpi-range">Loading…</span>
+          <a class="link" href="/api/exports/customer-kpis.xlsx?months=12" id="kpi-xlsx">
+            Download Excel (com gráficos)
+          </a>
+        </div>
       </div>
       <p class="muted">
         Cumulative unique customers (first flight in the window) and month-by-month
@@ -162,6 +167,7 @@
         <li><code>GET /api/v1/summary?days=365</code></li>
         <li><code>GET /api/v1/monthly</code></li>
         <li><code>GET /api/v1/customers/kpis?months=12</code></li>
+        <li><code>GET /api/v1/customers/kpis.xlsx?months=12</code></li>
         <li><code>GET /api/v1/routes?days=365</code></li>
         <li><code>GET /api/v1/passengers/top?days=365</code></li>
         <li><code>GET /api/v1/flights?start_date=2025-07-01&amp;end_date=2026-07-01</code></li>

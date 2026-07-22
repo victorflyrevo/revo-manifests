@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -26,6 +26,7 @@ from app.auth import (
 from app.config import settings
 from app.customer_kpis import compute_customer_kpis
 from app.db import SessionLocal, get_db, init_db
+from app.excel_export import build_customer_kpi_workbook
 from app.ingest import ingest_workbook
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
@@ -533,6 +534,19 @@ def stats_summary(
 def stats_customers_kpis(months: int = 12, db: Session = Depends(get_db)) -> dict:
     """Legacy alias for cumulative unique growth + LTM repeat rate by month."""
     return compute_customer_kpis(db, months=months)
+
+
+@app.get("/api/exports/customer-kpis.xlsx")
+def export_customer_kpis_xlsx(months: int = 12, db: Session = Depends(get_db)):
+    """Download Excel with customer KPIs, operational tables, and charts."""
+    data = build_customer_kpi_workbook(db, months=months)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="revo-customer-kpis.xlsx"'
+        },
+    )
 
 
 @app.get("/api/stats/monthly")

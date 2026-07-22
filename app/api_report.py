@@ -6,13 +6,14 @@ from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import require_api_key
 from app.customer_kpis import compute_customer_kpis
 from app.db import get_db
+from app.excel_export import build_customer_kpi_workbook
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
 router = APIRouter(
@@ -57,6 +58,7 @@ def api_index() -> dict:
             "GET /api/v1/summary",
             "GET /api/v1/monthly",
             "GET /api/v1/customers/kpis",
+            "GET /api/v1/customers/kpis.xlsx",
             "GET /api/v1/routes",
             "GET /api/v1/passengers/top",
             "GET /api/v1/flights",
@@ -84,6 +86,22 @@ def customers_kpis(
     ends on the latest month with data (not necessarily calendar today).
     """
     return compute_customer_kpis(db, months=months)
+
+
+@router.get("/customers/kpis.xlsx")
+def customers_kpis_xlsx(
+    months: int = Query(12, ge=1, le=120),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Excel workbook with KPI tables and ready-made charts."""
+    data = build_customer_kpi_workbook(db, months=months)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="revo-customer-kpis.xlsx"'
+        },
+    )
 
 
 @router.get("/summary")
