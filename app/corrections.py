@@ -262,6 +262,36 @@ def _candidate_years(period: FilenamePeriod, month: int) -> list[int]:
     return ordered
 
 
+def parse_ddmm_token(value: Any) -> Optional[tuple[int, int]]:
+    """Parse a bare DDMM token such as ``3006`` / ``30/06`` / ``30-06`` → (30, 6)."""
+    if value is None or isinstance(value, (date, datetime)):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            num = int(value)
+        except (TypeError, ValueError):
+            return None
+        # Reject Excel serials; only compact DDMM (3–4 digits)
+        if 101 <= num <= 3112:
+            text = f"{num:04d}"
+            dd, mm = int(text[:2]), int(text[2:])
+            if 1 <= mm <= 12 and 1 <= dd <= 31:
+                return dd, mm
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    # Pure DDMM with no separators (the common manifesto typo vs 30/06)
+    if re.fullmatch(r"\d{3,4}", text):
+        text = text.zfill(4)
+        dd, mm = int(text[:2]), int(text[2:])
+        if 1 <= mm <= 12 and 1 <= dd <= 31:
+            return dd, mm
+        return None
+    return extract_sheet_ddmm(text)
+
+
 def _best_date_for_ddmm(
     dd: int, mm: int, filename: str, cell_date: Optional[date] = None
 ) -> Optional[date]:
@@ -280,37 +310,37 @@ def _best_date_for_ddmm(
     if not candidates:
         return cell_date
 
-    # If cell day/month matches, snap its year to the best candidate
+    mid = period.midpoint
+    best = min(candidates, key=lambda d: abs((d - mid).days))
+
+    # Sheet / DDMM token wins on day+month. Cell is only used to pick the year
+    # when it already agrees on day/month (or is absent).
     if cell_date and (cell_date.day, cell_date.month) == (dd, mm):
-        mid = period.midpoint
         return min(candidates, key=lambda d: abs((d - mid).days))
 
-    if cell_date and abs(cell_date.year - period.year) <= 1:
-        # Trust cell when it already sits near the period and day/month disagree
-        # only slightly (parser noise) — still prefer sheet DDMM near midpoint
-        mid = period.midpoint
-        best = min(candidates, key=lambda d: abs((d - mid).days))
-        # Keep cell if it is closer to midpoint than any candidate swap would be
-        # and day/month already match a valid calendar reading of the cell itself
-        if abs((cell_date - mid).days) <= abs((best - mid).days):
-            return cell_date
-        return best
-
-    mid = period.midpoint
-    return min(candidates, key=lambda d: abs((d - mid).days))
+    return best
 
 
 def resolve_flight_date(
     cell_date: Any, sheet_name: str, filename: str
 ) -> Optional[date]:
-    """Resolve the operational flight date from cell + sheet + filename hints."""
+    """Resolve the operational flight date from cell + sheet + filename hints.
+
+    Manifesto tabs encode the day as ``DDMM`` (e.g. ``3006`` = 30/06). That
+    token always wins over a conflicting cell value.
+    """
     fd: Optional[date] = None
     if isinstance(cell_date, datetime):
         fd = cell_date.date()
     elif isinstance(cell_date, date):
         fd = cell_date
+    else:
+        # Cell sometimes stores the tab convention literally: 3006 or "3006"
+        token = parse_ddmm_token(cell_date)
+        if token:
+            return _best_date_for_ddmm(token[0], token[1], filename, cell_date=None)
 
-    ddmm = extract_sheet_ddmm(sheet_name)
+    ddmm = extract_sheet_ddmm(sheet_name) or parse_ddmm_token(sheet_name)
     if not ddmm:
         return fd
 
