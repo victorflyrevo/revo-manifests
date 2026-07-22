@@ -88,6 +88,28 @@ def purge_cancelled_flights(
     return report.as_dict()
 
 
+@router.post("/repair/dates")
+def repair_flight_dates_api(
+    dry_run: bool = Query(True),
+    fix_null_dates: bool = Query(True),
+    fix_inconsistent_dates: bool = Query(True),
+    remove_cancelled: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Fix null/inconsistent flight dates from sheet DDMM tokens (API key auth).
+
+    Example: sheet ``3006`` + wrong cell month → ``2026-06-30``.
+    """
+    report = repair_existing_flights(
+        db,
+        fix_null_dates=fix_null_dates,
+        fix_inconsistent_dates=fix_inconsistent_dates,
+        remove_cancelled=remove_cancelled,
+        dry_run=dry_run,
+    )
+    return report.as_dict()
+
+
 @router.get("/summary")
 def summary(
     days: Optional[int] = Query(None, ge=1, le=3650),
