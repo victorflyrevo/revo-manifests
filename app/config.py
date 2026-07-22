@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     api_key: str = ""
     # Comma-separated origins for external reports, or * 
     cors_origins: str = "*"
-    # REVO Identity (JWKS). When set, UI + /api/upload require IdP JWT.
+    # REVO Identity (JWKS). When set, UI + /api/upload require IdP JWT
+    # (viewer role is enough for full Manifests access including upload).
     identity_issuer_url: str = ""
     identity_client_id: str = "revo-manifests"
 

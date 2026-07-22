@@ -66,11 +66,15 @@ def require_identity(
 def require_uploader(
     claims: dict[str, Any] = Depends(require_identity),
 ) -> dict[str, Any]:
+    """Any Manifests app role may upload (viewer already unlocks full access)."""
     verifier = _verifier()
     if verifier is None:
         return claims
-    if not verifier.has_role(claims, "uploader", "admin"):
-        raise HTTPException(status_code=403, detail="Requires role uploader or admin")
+    if not verifier.has_role(claims, "viewer", "uploader", "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Requires role viewer, uploader, or admin",
+        )
     return claims
 
 
