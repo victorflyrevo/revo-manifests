@@ -105,3 +105,74 @@ def test_merge_cpf_split_passengers() -> None:
     assert len(remaining) == 1
     assert remaining[0].identity_key == "doc:CPF26714955871"
     assert remaining[0].total_boardings == 2
+
+
+def test_merge_compatible_subset_when_cpf_shared() -> None:
+    """Same CPF bucket can hold different people; only matching names merge."""
+    db = _session()
+    fabio_a = Passenger(
+        identity_key="doc:CPF07072361774",
+        display_name="Fabio Gabai Puga Nazari",
+        document_normalized="CPF07072361774",
+        total_boardings=2,
+    )
+    fabio_b = Passenger(
+        identity_key="doc:PSPTFV660046CPF07072361774",
+        display_name="Fabio Gabai Puga Nazari",
+        document_normalized="PSPTFV660046CPF07072361774",
+        total_boardings=1,
+    )
+    other = Passenger(
+        identity_key="doc:RG07072361774",
+        display_name="Felipe Gross Nazari",
+        document_normalized="RG07072361774",
+        total_boardings=1,
+    )
+    db.add_all([fabio_a, fabio_b, other])
+    db.flush()
+    flights = [
+        Flight(
+            fingerprint=f"f{i}",
+            source_file="a.xlsx",
+            sheet_name="0101",
+            flight_date=date(2025, 1, i),
+            origin_code="SBGR",
+            dest_code="SDXQ",
+            pax_count=1,
+        )
+        for i in range(1, 4)
+    ]
+    db.add_all(flights)
+    db.flush()
+    db.add_all(
+        [
+            Boarding(
+                flight_id=flights[0].id,
+                passenger_id=fabio_a.id,
+                flight_date=date(2025, 1, 1),
+                passenger_name_raw=fabio_a.display_name,
+            ),
+            Boarding(
+                flight_id=flights[1].id,
+                passenger_id=fabio_b.id,
+                flight_date=date(2025, 1, 2),
+                passenger_name_raw=fabio_b.display_name,
+            ),
+            Boarding(
+                flight_id=flights[2].id,
+                passenger_id=other.id,
+                flight_date=date(2025, 1, 3),
+                passenger_name_raw=other.display_name,
+            ),
+        ]
+    )
+    db.commit()
+
+    report = repair_merge_split_identities(db, dry_run=False)
+    assert report.groups_found == 1
+    assert report.passengers_merged == 1
+    remaining = {p.display_name: p for p in db.scalars(select(Passenger)).all()}
+    assert len(remaining) == 2
+    assert "Fabio Gabai Puga Nazari" in remaining
+    assert remaining["Fabio Gabai Puga Nazari"].total_boardings == 2
+    assert "Felipe Gross Nazari" in remaining

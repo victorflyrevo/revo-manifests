@@ -194,25 +194,25 @@ def repair_merge_split_identities(
             continue
         buckets.setdefault(canon, []).append(pax)
 
+    from sqlalchemy import delete, update
+
     for canon, group in buckets.items():
         if len(group) < 2:
             continue
 
-        # Name safety check across the group
-        names = [g.display_name or "" for g in group]
-        sims: list[float] = []
-        for i in range(len(names)):
-            for j in range(i + 1, len(names)):
-                sims.append(name_similarity(names[i], names[j]))
-        min_sim = min(sims) if sims else 1.0
-        if min_sim < min_name_similarity:
+        # Cluster compatible names within the same document; do not require
+        # every member of the bucket to match (shared/wrong CPFs happen).
+        clusters = _name_clusters(group, min_name_similarity)
+        mergeable = [c for c in clusters if len(c) >= 2]
+        leftovers = [p for c in clusters if len(c) == 1 for p in c]
+
+        if not mergeable:
             report.skipped_unsafe += 1
             if len(report.samples) < sample_limit:
                 report.samples.append(
                     {
                         "action": "skip_unsafe_name_mismatch",
                         "canonical_doc": canon,
-                        "min_name_similarity": round(min_sim, 2),
                         "members": [
                             {
                                 "id": g.id,
@@ -226,100 +226,166 @@ def repair_merge_split_identities(
                 )
             continue
 
-        report.groups_found += 1
-        # Keep the passenger with most boardings, then lowest id
-        keeper = max(group, key=lambda g: (g.total_boardings or 0, -g.id))
-        losers = [g for g in group if g.id != keeper.id]
-
-        sample = {
-            "action": "merge_identities",
-            "canonical_doc": canon,
-            "min_name_similarity": round(min_sim, 2),
-            "kept_id": keeper.id,
-            "kept_key": keeper.identity_key,
-            "kept_name": keeper.display_name,
-            "merged": [
+        if leftovers and len(report.samples) < sample_limit:
+            report.skipped_unsafe += len(leftovers)
+            report.samples.append(
                 {
-                    "id": g.id,
-                    "identity_key": g.identity_key,
-                    "name": g.display_name,
-                    "boardings": g.total_boardings,
+                    "action": "skip_partial_doc_collision",
+                    "canonical_doc": canon,
+                    "left_unmerged": [
+                        {
+                            "id": g.id,
+                            "identity_key": g.identity_key,
+                            "name": g.display_name,
+                            "boardings": g.total_boardings,
+                        }
+                        for g in leftovers
+                    ],
                 }
-                for g in losers
-            ],
-        }
-        if len(report.samples) < sample_limit:
-            report.samples.append(sample)
-
-        if dry_run:
-            report.passengers_merged += len(losers)
-            continue
-
-        best_name = keeper.display_name
-        for loser in losers:
-            if len(loser.display_name or "") > len(best_name or ""):
-                best_name = loser.display_name
-
-        from sqlalchemy import delete, update
-
-        target_key = f"doc:{canon}"
-        # If another row already owns the canonical key, that row must be deleted
-        # before we rename the keeper (unique identity_key).
-        for loser in losers:
-            boardings = list(
-                db.scalars(select(Boarding).where(Boarding.passenger_id == loser.id)).all()
             )
-            for b in boardings:
-                existing = db.scalar(
-                    select(Boarding.id).where(
-                        Boarding.flight_id == b.flight_id,
-                        Boarding.passenger_id == keeper.id,
-                    )
+
+        for cluster in mergeable:
+            report.groups_found += 1
+            keeper = max(cluster, key=lambda g: (g.total_boardings or 0, -g.id))
+            losers = [g for g in cluster if g.id != keeper.id]
+            sims = [
+                name_similarity(a.display_name or "", b.display_name or "")
+                for i, a in enumerate(cluster)
+                for b in cluster[i + 1 :]
+            ]
+            min_sim = min(sims) if sims else 1.0
+
+            if len(report.samples) < sample_limit:
+                report.samples.append(
+                    {
+                        "action": "merge_identities",
+                        "canonical_doc": canon,
+                        "min_name_similarity": round(min_sim, 2),
+                        "kept_id": keeper.id,
+                        "kept_key": keeper.identity_key,
+                        "kept_name": keeper.display_name,
+                        "merged": [
+                            {
+                                "id": g.id,
+                                "identity_key": g.identity_key,
+                                "name": g.display_name,
+                                "boardings": g.total_boardings,
+                            }
+                            for g in losers
+                        ],
+                    }
                 )
-                if existing:
-                    db.execute(delete(Boarding).where(Boarding.id == b.id))
-                    report.boardings_deduped += 1
-                else:
-                    db.execute(
-                        update(Boarding)
-                        .where(Boarding.id == b.id)
-                        .values(passenger_id=keeper.id)
+
+            if dry_run:
+                report.passengers_merged += len(losers)
+                continue
+
+            best_name = keeper.display_name
+            for loser in losers:
+                if len(loser.display_name or "") > len(best_name or ""):
+                    best_name = loser.display_name
+
+            for loser in losers:
+                boardings = list(
+                    db.scalars(
+                        select(Boarding).where(Boarding.passenger_id == loser.id)
+                    ).all()
+                )
+                for b in boardings:
+                    existing = db.scalar(
+                        select(Boarding.id).where(
+                            Boarding.flight_id == b.flight_id,
+                            Boarding.passenger_id == keeper.id,
+                        )
                     )
-                    report.boardings_reassigned += 1
-            db.flush()
-            db.execute(delete(Passenger).where(Passenger.id == loser.id))
-            report.passengers_merged += 1
+                    if existing:
+                        db.execute(delete(Boarding).where(Boarding.id == b.id))
+                        report.boardings_deduped += 1
+                    else:
+                        db.execute(
+                            update(Boarding)
+                            .where(Boarding.id == b.id)
+                            .values(passenger_id=keeper.id)
+                        )
+                        report.boardings_reassigned += 1
+                db.flush()
+                db.execute(delete(Passenger).where(Passenger.id == loser.id))
+                report.passengers_merged += 1
+                db.flush()
+
+            target_key = f"doc:{canon}"
+            occupied = db.scalar(
+                select(Passenger.id).where(
+                    Passenger.identity_key == target_key,
+                    Passenger.id != keeper.id,
+                )
+            )
+            values: dict[str, Any] = {
+                "display_name": best_name or keeper.display_name,
+                "document_normalized": canon,
+            }
+            if not occupied:
+                values["identity_key"] = target_key
+            db.execute(
+                update(Passenger).where(Passenger.id == keeper.id).values(**values)
+            )
             db.flush()
 
-        db.execute(
-            update(Passenger)
-            .where(Passenger.id == keeper.id)
-            .values(
-                display_name=best_name or keeper.display_name,
-                identity_key=target_key,
-                document_normalized=canon,
+            remaining = list(
+                db.scalars(
+                    select(Boarding).where(Boarding.passenger_id == keeper.id)
+                ).all()
             )
-        )
-        db.flush()
-
-        remaining = list(
-            db.scalars(select(Boarding).where(Boarding.passenger_id == keeper.id)).all()
-        )
-        dates = [b.flight_date for b in remaining if b.flight_date]
-        db.execute(
-            update(Passenger)
-            .where(Passenger.id == keeper.id)
-            .values(
-                total_boardings=len(remaining),
-                first_seen=min(dates) if dates else None,
-                last_seen=max(dates) if dates else None,
+            dates = [b.flight_date for b in remaining if b.flight_date]
+            db.execute(
+                update(Passenger)
+                .where(Passenger.id == keeper.id)
+                .values(
+                    total_boardings=len(remaining),
+                    first_seen=min(dates) if dates else None,
+                    last_seen=max(dates) if dates else None,
+                )
             )
-        )
-        db.flush()
-        db.expire_all()
+            db.flush()
+            db.expire_all()
 
     if not dry_run:
         db.commit()
     else:
         db.rollback()
     return report
+
+
+def _name_clusters(
+    passengers: list[Any], min_name_similarity: float
+) -> list[list[Any]]:
+    """Connected components by pairwise name similarity."""
+    n = len(passengers)
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[rj] = ri
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if (
+                name_similarity(
+                    passengers[i].display_name or "",
+                    passengers[j].display_name or "",
+                )
+                >= min_name_similarity
+            ):
+                union(i, j)
+
+    clusters: dict[int, list[Any]] = {}
+    for i, pax in enumerate(passengers):
+        clusters.setdefault(find(i), []).append(pax)
+    return list(clusters.values())
