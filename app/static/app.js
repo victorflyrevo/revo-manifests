@@ -87,7 +87,7 @@ clearBtn.addEventListener("click", clearFiles);
 });
 drop.addEventListener("drop", (e) => {
   const incoming = Array.from(e.dataTransfer.files || []).filter((f) =>
-    /\.(xlsx|xlsm|xls)$/i.test(f.name)
+    /\.(xlsx|xlsm|xls|csv)$/i.test(f.name)
   );
   if (!incoming.length) return;
 
