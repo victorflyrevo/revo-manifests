@@ -91,4 +91,120 @@ def test_hygiene_protocol_dry_run() -> None:
     out = run_hygiene_protocol(db, dry_run=True)
     assert out["dry_run"] is True
     assert "near_duplicates" in out
+    assert "reexports" in out
     assert out["totals"]["near_duplicate_flights_removed"] == 0
+
+
+def test_name_jaccard_catches_split_identity_keys() -> None:
+    """Same names, different identity_keys — still a duplicate flight."""
+    db = _session()
+    a = Flight(
+        fingerprint="fp-a",
+        source_file="Manifesto REVO Nov-Dez_2025.xlsx",
+        sheet_name="0601 SBGRxSIIR OOE",
+        flight_date=date(2026, 1, 6),
+        flight_time="09:45",
+        origin_code="SBGR",
+        dest_code="SIIR",
+        pax_count=2,
+    )
+    b = Flight(
+        fingerprint="fp-b",
+        source_file="Manifesto REVO Jan-Fev_2026.xlsx",
+        sheet_name="0601 SBGRxSIIR OOE",
+        flight_date=date(2026, 1, 6),
+        flight_time="09:45",
+        origin_code="SBGR",
+        dest_code="SIIR",
+        pax_count=2,
+    )
+    db.add_all([a, b])
+    db.flush()
+    for i, name in enumerate(["Gustavo Solon", "Stacie Burkett Solon"]):
+        pa = Passenger(
+            identity_key=f"doc:A{i}",
+            display_name=name,
+            total_boardings=1,
+        )
+        pb = Passenger(
+            identity_key=f"name:{name.upper()}",
+            display_name=name,
+            total_boardings=1,
+        )
+        db.add_all([pa, pb])
+        db.flush()
+        db.add_all(
+            [
+                Boarding(
+                    flight_id=a.id,
+                    passenger_id=pa.id,
+                    flight_date=date(2026, 1, 6),
+                    passenger_name_raw=name,
+                ),
+                Boarding(
+                    flight_id=b.id,
+                    passenger_id=pb.id,
+                    flight_date=date(2026, 1, 6),
+                    passenger_name_raw=name,
+                ),
+            ]
+        )
+    db.commit()
+    report = repair_near_duplicate_flights(db, dry_run=False, min_jaccard=0.5)
+    assert report.flights_removed == 1
+    assert len(list(db.scalars(select(Flight)).all())) == 1
+
+
+def test_ods_reexport_removed_against_xlsx() -> None:
+    from app.dedupe import repair_reexport_duplicates
+
+    db = _session()
+    xlsx = Flight(
+        fingerprint="fp-x",
+        source_file="Manifesto REVO Jul-Ago_2025.xlsx",
+        sheet_name="0309 SDXQxSBGR OOE",
+        flight_date=date(2025, 9, 3),
+        flight_time="15:00",
+        origin_code="SDXQ",
+        dest_code="SBGR",
+        pax_count=2,
+    )
+    ods = Flight(
+        fingerprint="fp-o",
+        source_file="Manifesto REVO Jul-Ago_2025.ods",
+        sheet_name="0309 SDXQxSBGR OOE",
+        flight_date=date(2025, 9, 3),
+        flight_time=None,
+        origin_code=None,
+        dest_code=None,
+        pax_count=2,
+    )
+    db.add_all([xlsx, ods])
+    db.flush()
+    for i, name in enumerate(["Alice Example", "Bob Example"]):
+        px = Passenger(identity_key=f"doc:X{i}", display_name=name, total_boardings=1)
+        po = Passenger(identity_key=f"doc:O{i}", display_name=name, total_boardings=1)
+        db.add_all([px, po])
+        db.flush()
+        db.add_all(
+            [
+                Boarding(
+                    flight_id=xlsx.id,
+                    passenger_id=px.id,
+                    flight_date=date(2025, 9, 3),
+                    passenger_name_raw=name,
+                ),
+                Boarding(
+                    flight_id=ods.id,
+                    passenger_id=po.id,
+                    flight_date=date(2025, 9, 3),
+                    passenger_name_raw=name,
+                ),
+            ]
+        )
+    db.commit()
+    report = repair_reexport_duplicates(db, dry_run=False)
+    assert report.flights_removed == 1
+    remaining = list(db.scalars(select(Flight)).all())
+    assert len(remaining) == 1
+    assert remaining[0].source_file.endswith(".xlsx")
