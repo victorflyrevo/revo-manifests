@@ -1,0 +1,8 @@
+REVO Customer KPIs — local
+
+Fonte: https://web-production-9b4c2.up.railway.app
+Base: janeiro/2025 → hoje
+
+Abrir: http://127.0.0.1:8765
+Excel: revo-customer-kpis.xlsx
+Regenerar: python3 build_full_dashboard.py

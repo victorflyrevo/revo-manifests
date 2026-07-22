@@ -1,0 +1,6 @@
+.env.local
+*.csv
+*.xlsx
+data.js
+index.html
+__pycache__/
