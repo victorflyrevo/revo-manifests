@@ -147,11 +147,28 @@ def repair_near_duplicates_api(
     min_jaccard: float = Query(0.5, ge=0.3, le=1.0),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Remove near-duplicate flights (same slot + passenger overlap)."""
+    """Remove near-duplicate flights (same slot + passenger name/key overlap)."""
+    from app.dedupe import repair_empty_flights, repair_reexport_duplicates
+
+    empty = repair_empty_flights(db, dry_run=dry_run)
+    reexports = repair_reexport_duplicates(db, dry_run=dry_run)
     report = repair_near_duplicate_flights(
         db, min_jaccard=min_jaccard, dry_run=dry_run
     )
-    return report.as_dict()
+    return {
+        "dry_run": dry_run,
+        "empty_flights": empty.as_dict(),
+        "reexports": reexports.as_dict(),
+        "near_duplicates": report.as_dict(),
+        "totals": {
+            "empty_flights_removed": empty.flights_removed,
+            "reexport_flights_removed": reexports.flights_removed,
+            "near_duplicate_flights_removed": report.flights_removed,
+            "boardings_removed": empty.boardings_removed
+            + reexports.boardings_removed
+            + report.boardings_removed,
+        },
+    }
 
 
 @router.post("/repair/identities")
