@@ -272,8 +272,9 @@ def run_hygiene_protocol(
     dry_run: bool = True,
     min_jaccard: float = 0.5,
 ) -> dict[str, Any]:
-    """Full clean-base protocol: cancelled → SIAV loops → dates → near-dupes."""
+    """Full clean-base protocol: cancelled → SIAV → dates → flight dupes → identities."""
     from app.corrections import repair_existing_flights
+    from app.identity import repair_merge_split_identities
 
     cancelled = repair_existing_flights(
         db,
@@ -302,18 +303,21 @@ def run_hygiene_protocol(
     dupes = repair_near_duplicate_flights(
         db, min_jaccard=min_jaccard, dry_run=dry_run
     )
+    identities = repair_merge_split_identities(db, dry_run=dry_run)
     return {
         "dry_run": dry_run,
         "protocol": [
             "1. remove cancelled sheets",
             "2. remove SIAV→SIAV training flights with passengers",
             "3. fix sheet-DDMM date inconsistencies / wrong-dated duplicates",
-            "4. remove near-duplicate overlaps (same slot + passenger Jaccard)",
+            "4. remove near-duplicate flight overlaps (same slot + passenger Jaccard)",
+            "5. merge split passenger identities (same CPF/doc, compatible names)",
         ],
         "cancelled": cancelled.as_dict(),
         "siav_loops": siav.as_dict(),
         "dates": dates.as_dict(),
         "near_duplicates": dupes.as_dict(),
+        "identities": identities.as_dict(),
         "totals": {
             "cancelled_removed": cancelled.cancelled_removed,
             "siav_loops_removed": siav.siav_loops_removed,
@@ -321,5 +325,8 @@ def run_hygiene_protocol(
             "date_duplicates_removed": dates.duplicates_removed,
             "near_duplicate_flights_removed": dupes.flights_removed,
             "near_duplicate_boardings_removed": dupes.boardings_removed,
+            "passengers_merged": identities.passengers_merged,
+            "identity_groups_merged": identities.groups_found,
+            "identity_unsafe_skipped": identities.skipped_unsafe,
         },
     }

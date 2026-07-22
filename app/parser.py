@@ -120,19 +120,10 @@ def norm_name(s: Any) -> Optional[str]:
 
 
 def norm_doc(s: Any) -> Optional[str]:
-    if s is None:
-        return None
-    text = str(s).strip()
-    if not text or text.lower() in {
-        "nan",
-        "none",
-        "à confirmar",
-        "a confirmar",
-        "confirmar",
-    }:
-        return None
-    digits = re.sub(r"[^0-9A-Za-z]", "", text).upper()
-    return digits if len(digits) >= 4 else None
+    """Normalize passenger document to a stable canonical form (prefers CPF)."""
+    from app.identity import canonical_document
+
+    return canonical_document(s)
 
 
 # Must fit flights.origin_code / dest_code (VARCHAR(8))
@@ -166,13 +157,10 @@ def airport_code(s: Any) -> Optional[str]:
 
 
 def identity_key(name: str, document: Any) -> tuple[str, Optional[str]]:
-    doc = norm_doc(document)
-    n = norm_name(name)
-    if doc:
-        return f"doc:{doc}", doc
-    if n:
-        return f"name:{n}", None
-    return f"raw:{hashlib.sha1(name.encode()).hexdigest()[:16]}", None
+    """Document-preferred identity; CPF variants collapse to the same key."""
+    from app.identity import identity_key as _identity_key
+
+    return _identity_key(name, document)
 
 
 def sheet_ddmm(sn: str) -> Optional[tuple[int, int]]:

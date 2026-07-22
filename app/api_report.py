@@ -17,6 +17,7 @@ from app.corrections import (
     repair_existing_flights,
 )
 from app.dedupe import repair_near_duplicate_flights, run_hygiene_protocol
+from app.identity import repair_merge_split_identities
 from app.db import get_db
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
@@ -72,6 +73,7 @@ def api_index() -> dict:
             "POST /api/v1/repair/dates",
             "POST /api/v1/repair/siav-loops",
             "POST /api/v1/repair/duplicates",
+            "POST /api/v1/repair/identities",
             "POST /api/v1/repair/all",
         ],
     }
@@ -152,13 +154,26 @@ def repair_near_duplicates_api(
     return report.as_dict()
 
 
+@router.post("/repair/identities")
+def repair_passenger_identities_api(
+    dry_run: bool = Query(True),
+    min_name_similarity: float = Query(0.5, ge=0.3, le=1.0),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Merge passengers split by document formatting (CPF vs CPF123…) when names match."""
+    report = repair_merge_split_identities(
+        db, min_name_similarity=min_name_similarity, dry_run=dry_run
+    )
+    return report.as_dict()
+
+
 @router.post("/repair/all")
 def repair_all_hygiene(
     dry_run: bool = Query(True),
     min_jaccard: float = Query(0.5, ge=0.3, le=1.0),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Run the full clean-base protocol (cancelled, SIAV loops, dates, duplicates).
+    """Run the full clean-base protocol (cancelled, SIAV, dates, flight dupes, identities).
 
     Recommended after bulk uploads. Defaults to dry_run=true.
     """
