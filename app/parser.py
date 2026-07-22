@@ -14,6 +14,13 @@ from typing import Any, BinaryIO, Iterable, Optional
 
 import openpyxl
 
+from app.corrections import (
+    extract_sheet_ddmm,
+    is_skippable_sheet,
+    resolve_flight_date,
+    year_hint_from_filename as _year_hint_from_filename,
+)
+
 SKIP_PREFIXES = ("base de dados", "xxxx")
 
 # Flat "Base de Dados" / boardings CSV column aliases (normalized header → field)
@@ -149,55 +156,20 @@ def identity_key(name: str, document: Any) -> tuple[str, Optional[str]]:
 
 
 def sheet_ddmm(sn: str) -> Optional[tuple[int, int]]:
-    m = re.match(r"^(?:C[oó]pia de\s+)?(\d{4})\b", sn.strip(), re.I)
-    if not m:
-        return None
-    dd, mm = int(m.group(1)[:2]), int(m.group(1)[2:])
-    if 1 <= mm <= 12 and 1 <= dd <= 31:
-        return dd, mm
-    return None
+    """Backward-compatible wrapper around corrections.extract_sheet_ddmm."""
+    return extract_sheet_ddmm(sn)
 
 
 def year_hint_from_filename(filename: str) -> Optional[int]:
-    m = re.search(r"(20\d{2})", filename)
-    return int(m.group(1)) if m else None
+    """Backward-compatible wrapper around corrections.year_hint_from_filename."""
+    return _year_hint_from_filename(filename)
 
 
 def resolve_date(
     cell_date: Any, sheet_name: str, filename: str
 ) -> Optional[date]:
-    fd: Optional[date] = None
-    if isinstance(cell_date, datetime):
-        fd = cell_date.date()
-    elif isinstance(cell_date, date):
-        fd = cell_date
-
-    yh = year_hint_from_filename(filename)
-    ddmm = sheet_ddmm(sheet_name)
-    if not ddmm or not yh:
-        return fd
-
-    dd, mm = ddmm
-    years = [yh]
-    if "Jan" in filename:
-        years.append(yh - 1)
-
-    candidates: list[date] = []
-    for y in years:
-        try:
-            candidates.append(date(y, mm, dd))
-        except ValueError:
-            pass
-
-    if fd and candidates:
-        if (fd.day, fd.month) == (dd, mm) and abs(fd.year - yh) <= 1:
-            return fd
-        mid = date(yh, 6, 15)
-        return min(candidates, key=lambda d: abs((d - mid).days))
-    if candidates and not fd:
-        mid = date(yh, 6, 15)
-        return min(candidates, key=lambda d: abs((d - mid).days))
-    return fd
+    """Backward-compatible wrapper around corrections.resolve_flight_date."""
+    return resolve_flight_date(cell_date, sheet_name, filename)
 
 
 def flight_fingerprint(fl: ParsedFlight, source_file: str) -> str:
@@ -346,8 +318,7 @@ def parse_workbook(file_obj: BinaryIO, filename: str) -> ParseResult:
     skipped = 0
 
     for sn in wb.sheetnames:
-        sl = sn.strip().lower()
-        if sl.startswith(SKIP_PREFIXES):
+        if is_skippable_sheet(sn) or sn.strip().lower().startswith(SKIP_PREFIXES):
             skipped += 1
             continue
         flights.append(_parse_sheet(wb[sn], sn, filename))
@@ -450,8 +421,7 @@ def parse_ods(file_obj: BinaryIO, filename: str) -> ParseResult:
 
     for table in doc.spreadsheet.getElementsByType(Table):
         sn = table.getAttribute("name") or "Sheet"
-        sl = sn.strip().lower()
-        if sl.startswith(SKIP_PREFIXES):
+        if is_skippable_sheet(sn) or sn.strip().lower().startswith(SKIP_PREFIXES):
             skipped += 1
             continue
         rows = _ods_table_rows(table)
@@ -643,6 +613,12 @@ def _parse_flat_csv_rows(
                 aircraft_reg or aircraft_code or "",
             ]
             sheet_name = "CSV " + " ".join(b for b in bits if b)
+
+        # Apply the same date corrections used for Excel/ODS sheets
+        fd = resolve_date(fd, sheet_name, filename)
+
+        if is_skippable_sheet(sheet_name):
+            continue
 
         if not aircraft_code:
             m = re.search(r"\b(OOE\d*|OMB\d*|OMH\d*)\b", sheet_name.upper())

@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.corrections import annotate_gap_hint
 from app.models import Boarding, Flight, Passenger, UploadBatch
 from app.parser import ParseResult, content_hash, parse_bytes
 
@@ -127,10 +128,18 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
         kind = "ODS"
     else:
         kind = "workbook"
-    batch.notes = (
+    last_date = None
+    for fl in parsed.flights:
+        if fl.flight_date and (last_date is None or fl.flight_date > last_date):
+            last_date = fl.flight_date
+    notes = [
         f"Processed {kind}: {len(parsed.flights)} flight(s); "
-        f"skipped {parsed.skipped_sheets} template sheet(s)."
-    )
+        f"skipped {parsed.skipped_sheets} template/cancelled sheet(s)."
+    ]
+    gap = annotate_gap_hint(filename, last_date)
+    if gap:
+        notes.append(gap)
+    batch.notes = " ".join(notes)
     db.commit()
     db.refresh(batch)
     return batch
