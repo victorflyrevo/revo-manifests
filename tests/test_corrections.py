@@ -95,3 +95,25 @@ def test_resolve_corrects_wrong_cell_year_on_boundary() -> None:
     assert resolve_flight_date(cell, "0101 OOE1", "Nov-Dez_2025.xlsx") == date(
         2026, 1, 1
     )
+
+
+def test_sheet_ddmm_3006_means_30_june() -> None:
+    assert extract_sheet_ddmm("3006 SIIRxSBGR OMB 2") == (30, 6)
+    assert resolve_flight_date(None, "3006 SIIRxSBGR OMB 2", "Mai-Jun_2026.xlsx") == date(
+        2026, 6, 30
+    )
+
+
+def test_sheet_ddmm_wins_over_conflicting_cell_month() -> None:
+    # Cell wrongly says 30/05; tab 3006 must become 30/06
+    cell = date(2026, 5, 30)
+    assert resolve_flight_date(
+        cell, "3006 SIIRxSBGR OMB 2", "Manifesto REVO Mai-Jun_2026.xlsx"
+    ) == date(2026, 6, 30)
+
+
+def test_cell_literal_3006_parsed_as_30_june() -> None:
+    assert resolve_flight_date(3006, "Voo OMB", "Mai-Jun_2026.xlsx") == date(2026, 6, 30)
+    assert resolve_flight_date("3006", "Voo OMB", "Mai-Jun_2025.xlsx") == date(
+        2025, 6, 30
+    )
