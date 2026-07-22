@@ -24,6 +24,7 @@ from app.auth import (
     require_uploader,
 )
 from app.config import settings
+from app.corrections import repair_existing_flights
 from app.db import SessionLocal, get_db, init_db
 from app.ingest import ingest_workbook
 from app.models import Boarding, Flight, Passenger, UploadBatch
@@ -480,6 +481,29 @@ async def upload_manifests_batch(
             "results": results,
         }
     )
+
+
+@app.post("/api/repair/dates")
+def repair_flight_dates(
+    dry_run: bool = True,
+    remove_cancelled: bool = True,
+    fix_null_dates: bool = True,
+    fix_inconsistent_dates: bool = True,
+    db: Session = Depends(get_db),
+    _claims: dict = Depends(require_uploader),
+) -> JSONResponse:
+    """Recompute missing/wrong flight dates and drop cancelled sheets already ingested.
+
+    Defaults to dry_run=true so operators can preview changes first.
+    """
+    report = repair_existing_flights(
+        db,
+        fix_null_dates=fix_null_dates,
+        fix_inconsistent_dates=fix_inconsistent_dates,
+        remove_cancelled=remove_cancelled,
+        dry_run=dry_run,
+    )
+    return JSONResponse(report.as_dict())
 
 
 @app.get("/api/stats/summary")
