@@ -19,8 +19,8 @@
       <p class="eyebrow">REVO · Omni</p>
       <h1>Manifest ingest</h1>
       <p class="lede">
-        Upload REVO manifesto workbooks or CSV bases. Each sheet/flight group
-        becomes a flight; passengers are stored for long-term analytics.
+        Upload REVO manifesto workbooks (Excel/ODS) or CSV bases. Each
+        sheet/flight group becomes a flight; passengers are stored for long-term analytics.
       </p>
       <p class="muted" style="margin-top:12px">
         <a class="link" href="/logout">Sair</a>
@@ -45,12 +45,12 @@
     <section class="card">
       <h2>Upload workbooks / CSV</h2>
       <p class="muted">
-        Select <code>.xlsx</code> / <code>.xlsm</code> workbooks or <code>.csv</code> Base de Dados exports —
+        Select <code>.xlsx</code> / <code>.xlsm</code> / <code>.ods</code> workbooks or <code>.csv</code> Base de Dados exports —
         every flight sheet (or CSV flight group) is processed. Duplicates are skipped automatically.
       </p>
       <form id="upload-form">
         <label class="drop" id="drop">
-          <input id="file" type="file" accept=".xlsx,.xlsm,.xls,.csv,text/csv" multiple hidden />
+          <input id="file" type="file" accept=".xlsx,.xlsm,.xls,.ods,.csv,text/csv,application/vnd.oasis.opendocument.spreadsheet" multiple hidden />
           <span id="drop-label">Drop files here or <u>browse</u></span>
         </label>
         <div id="selected" class="selected" hidden>

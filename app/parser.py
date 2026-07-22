@@ -229,15 +229,14 @@ def flight_fingerprint(fl: ParsedFlight, source_file: str) -> str:
     return hashlib.sha256(operational.encode("utf-8")).hexdigest()
 
 
-def _parse_sheet(ws: Any, sn: str, filename: str) -> ParsedFlight:
-    """Parse one sheet. Reads all rows until TOTAL — no sheet/passenger cap."""
+def _parse_sheet_rows(rows: Iterable[Any], sn: str, filename: str) -> ParsedFlight:
+    """Parse one sheet from an iterable of row tuples — no passenger cap."""
     flight_date = origin = dest = hora = matricula = None
     passengers: list[ParsedPassenger] = []
     pax_mode = False
     empty_pax_streak = 0
 
-    # No max_row: process every row on the sheet
-    for row in ws.iter_rows(min_row=1, max_col=16, values_only=True):
+    for row in rows:
         if not row:
             if pax_mode:
                 empty_pax_streak += 1
@@ -245,10 +244,12 @@ def _parse_sheet(ws: Any, sn: str, filename: str) -> ParsedFlight:
                     break
             continue
 
+        # Normalize to a sequence we can index
+        row = tuple(row)
         if any(isinstance(v, str) and "TOTAL" in v.upper() for v in row if v is not None):
             break
 
-        label = row[0]
+        label = row[0] if len(row) > 0 else None
         if not pax_mode and label is not None:
             lab = str(label).strip().lower()
             val = row[3] if len(row) > 3 else None
@@ -263,14 +264,16 @@ def _parse_sheet(ws: Any, sn: str, filename: str) -> ParsedFlight:
             elif "matr" in lab:
                 matricula = row[13] if len(row) > 13 else val
             elif label == "#" or (
-                isinstance(row[1], str) and "nome" in str(row[1]).lower()
+                len(row) > 1
+                and isinstance(row[1], str)
+                and "nome" in str(row[1]).lower()
             ):
                 pax_mode = True
             continue
 
         if not pax_mode:
             # Header row detected by column B containing "Nome Passageiro"
-            if isinstance(row[1], str) and "nome" in row[1].lower():
+            if len(row) > 1 and isinstance(row[1], str) and "nome" in row[1].lower():
                 pax_mode = True
             continue
 
@@ -294,6 +297,10 @@ def _parse_sheet(ws: Any, sn: str, filename: str) -> ParsedFlight:
             )
         )
 
+    # String dates (common in ODS / CSV-exported sheets)
+    if not isinstance(flight_date, (date, datetime)):
+        flight_date = _parse_csv_date(flight_date)
+
     fd = resolve_date(flight_date, sn, filename)
 
     hora_s = None
@@ -302,7 +309,7 @@ def _parse_sheet(ws: Any, sn: str, filename: str) -> ParsedFlight:
     elif hasattr(hora, "hour"):
         hora_s = f"{hora.hour:02d}:{hora.minute:02d}"
     elif hora is not None:
-        hora_s = str(hora)[:16]
+        hora_s = _parse_csv_time(hora) or str(hora)[:16]
 
     ac = None
     m = re.search(r"\b(OOE\d*|OMB\d*|OMH\d*)\b", sn.upper())
@@ -325,6 +332,13 @@ def _parse_sheet(ws: Any, sn: str, filename: str) -> ParsedFlight:
     return fl
 
 
+def _parse_sheet(ws: Any, sn: str, filename: str) -> ParsedFlight:
+    """Parse one Excel sheet via openpyxl."""
+    return _parse_sheet_rows(
+        ws.iter_rows(min_row=1, max_col=16, values_only=True), sn, filename
+    )
+
+
 def parse_workbook(file_obj: BinaryIO, filename: str) -> ParseResult:
     """Parse every sheet in the workbook — no sheet-count limit."""
     wb = openpyxl.load_workbook(file_obj, read_only=True, data_only=True)
@@ -339,6 +353,110 @@ def parse_workbook(file_obj: BinaryIO, filename: str) -> ParseResult:
         flights.append(_parse_sheet(wb[sn], sn, filename))
 
     wb.close()
+    return ParseResult(source_file=filename, flights=flights, skipped_sheets=skipped)
+
+
+def _ods_cell_value(cell: Any) -> Any:
+    """Extract a Python value from an odfpy TableCell."""
+    from odf.text import P
+
+    vtype = (cell.getAttribute("valuetype") or "").lower()
+    if vtype == "float":
+        raw = cell.getAttribute("value")
+        if raw is None or raw == "":
+            return None
+        try:
+            num = float(raw)
+            return int(num) if num.is_integer() else num
+        except ValueError:
+            return raw
+    if vtype == "date":
+        raw = cell.getAttribute("datevalue") or cell.getAttribute("value")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(str(raw)[:19]).date()
+        except ValueError:
+            return _parse_csv_date(raw)
+    if vtype == "time":
+        raw = cell.getAttribute("timevalue") or cell.getAttribute("value")
+        if not raw:
+            return None
+        # ODS time: PThhHmmMssS
+        m = re.match(
+            r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$",
+            str(raw).upper(),
+        )
+        if m:
+            hh = int(m.group(1) or 0)
+            mm = int(m.group(2) or 0)
+            return f"{hh:02d}:{mm:02d}"
+        return str(raw)
+    if vtype == "boolean":
+        raw = (cell.getAttribute("booleanvalue") or "").lower()
+        return raw == "true"
+
+    parts: list[str] = []
+    for p in cell.getElementsByType(P):
+        if p.firstChild is not None and getattr(p.firstChild, "data", None):
+            parts.append(p.firstChild.data)
+    text = "".join(parts).strip()
+    if text:
+        return text
+    stringvalue = cell.getAttribute("stringvalue")
+    return stringvalue if stringvalue not in (None, "") else None
+
+
+def _ods_table_rows(table: Any, max_col: int = 16) -> list[tuple[Any, ...]]:
+    from odf.table import TableCell, TableRow
+
+    rows: list[tuple[Any, ...]] = []
+    for tr in table.getElementsByType(TableRow):
+        values: list[Any] = []
+        for cell in tr.getElementsByType(TableCell):
+            if len(values) >= max_col:
+                break
+            val = _ods_cell_value(cell)
+            repeat = cell.getAttribute("numbercolumnsrepeated")
+            n = 1
+            if repeat:
+                try:
+                    n = max(1, int(repeat))
+                except ValueError:
+                    n = 1
+            # Huge repeats are used for trailing empty columns — cap them
+            n = min(n, max_col - len(values))
+            values.extend([val] * n)
+        if len(values) < max_col:
+            values.extend([None] * (max_col - len(values)))
+        rows.append(tuple(values[:max_col]))
+    return rows
+
+
+def parse_ods(file_obj: BinaryIO, filename: str) -> ParseResult:
+    """Parse every sheet in an OpenDocument Spreadsheet (.ods)."""
+    from odf.opendocument import load
+    from odf.table import Table
+
+    # odfpy load() wants a path or file-like with read/seek
+    if hasattr(file_obj, "seek"):
+        try:
+            file_obj.seek(0)
+        except Exception:  # noqa: BLE001
+            pass
+    doc = load(file_obj)
+    flights: list[ParsedFlight] = []
+    skipped = 0
+
+    for table in doc.spreadsheet.getElementsByType(Table):
+        sn = table.getAttribute("name") or "Sheet"
+        sl = sn.strip().lower()
+        if sl.startswith(SKIP_PREFIXES):
+            skipped += 1
+            continue
+        rows = _ods_table_rows(table)
+        flights.append(_parse_sheet_rows(rows, sn, filename))
+
     return ParseResult(source_file=filename, flights=flights, skipped_sheets=skipped)
 
 
@@ -718,6 +836,8 @@ def parse_bytes(data: bytes, filename: str) -> ParseResult:
     lower = filename.lower()
     if lower.endswith(".csv"):
         return parse_csv(BytesIO(data), filename)
+    if lower.endswith(".ods"):
+        return parse_ods(BytesIO(data), filename)
     return parse_workbook(BytesIO(data), filename)
 
 

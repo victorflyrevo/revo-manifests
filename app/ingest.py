@@ -120,7 +120,13 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
     batch.flights_skipped = skipped
     batch.boardings_inserted = boardings
     batch.status = "processed"
-    kind = "CSV" if filename.lower().endswith(".csv") else "workbook"
+    lower = filename.lower()
+    if lower.endswith(".csv"):
+        kind = "CSV"
+    elif lower.endswith(".ods"):
+        kind = "ODS"
+    else:
+        kind = "workbook"
     batch.notes = (
         f"Processed {kind}: {len(parsed.flights)} flight(s); "
         f"skipped {parsed.skipped_sheets} template sheet(s)."

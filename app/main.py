@@ -374,9 +374,10 @@ async def upload_manifest(
     if not file.filename:
         raise HTTPException(400, "Missing filename")
     lower = file.filename.lower()
-    if not lower.endswith((".xlsx", ".xlsm", ".xls", ".csv")):
+    if not lower.endswith((".xlsx", ".xlsm", ".xls", ".ods", ".csv")):
         raise HTTPException(
-            400, "Only Excel (.xlsx/.xlsm/.xls) or CSV (.csv) files are supported"
+            400,
+            "Only Excel (.xlsx/.xlsm/.xls), ODS (.ods), or CSV (.csv) files are supported",
         )
 
     data = await file.read()
@@ -421,13 +422,13 @@ async def upload_manifests_batch(
     results = []
     for file in files:
         if not file.filename or not file.filename.lower().endswith(
-            (".xlsx", ".xlsm", ".xls", ".csv")
+            (".xlsx", ".xlsm", ".xls", ".ods", ".csv")
         ):
             results.append(
                 {
                     "filename": file.filename or "(unknown)",
                     "status": "error",
-                    "error": "Only Excel (.xlsx/.xlsm/.xls) or CSV (.csv) files are supported",
+                    "error": "Only Excel (.xlsx/.xlsm/.xls), ODS (.ods), or CSV (.csv) files are supported",
                 }
             )
             continue
