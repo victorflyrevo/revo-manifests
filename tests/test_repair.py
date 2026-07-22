@@ -86,6 +86,68 @@ def test_repair_fills_null_date_and_removes_cancelled() -> None:
     assert pax.first_seen == date(2026, 1, 1)
 
 
+def test_repair_removes_siav_loop_flights() -> None:
+    db = _session()
+    loop = Flight(
+        fingerprint="fp-siav",
+        source_file="Manifesto.xlsx",
+        sheet_name="0111 SIAVxSIAV OMH",
+        flight_date=date(2025, 11, 1),
+        origin_code="SIAV",
+        dest_code="SIAV",
+        pax_count=2,
+    )
+    normal = Flight(
+        fingerprint="fp-ok",
+        source_file="Manifesto.xlsx",
+        sheet_name="0111 SIAVxSBGR OMH",
+        flight_date=date(2025, 11, 1),
+        origin_code="SIAV",
+        dest_code="SBGR",
+        pax_count=1,
+    )
+    db.add_all([loop, normal])
+    db.flush()
+    pax = Passenger(
+        identity_key="doc:SIAV1",
+        display_name="Trainee",
+        document_normalized="SIAV1",
+        total_boardings=2,
+    )
+    db.add(pax)
+    db.flush()
+    db.add_all(
+        [
+            Boarding(
+                flight_id=loop.id,
+                passenger_id=pax.id,
+                flight_date=date(2025, 11, 1),
+                passenger_name_raw="Trainee",
+            ),
+            Boarding(
+                flight_id=normal.id,
+                passenger_id=pax.id,
+                flight_date=date(2025, 11, 1),
+                passenger_name_raw="Trainee",
+            ),
+        ]
+    )
+    db.commit()
+
+    report = repair_existing_flights(
+        db,
+        dry_run=False,
+        fix_null_dates=False,
+        fix_inconsistent_dates=False,
+        remove_cancelled=False,
+        remove_siav_loops=True,
+    )
+    assert report.siav_loops_removed == 1
+    remaining = list(db.scalars(select(Flight)).all())
+    assert len(remaining) == 1
+    assert remaining[0].dest_code == "SBGR"
+
+
 def test_repair_removes_wrong_dated_duplicate() -> None:
     """When the correct date already exists, drop the bad-dated copy."""
     db = _session()
