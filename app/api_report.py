@@ -11,7 +11,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import require_api_key
-from app.corrections import is_skippable_sheet, repair_existing_flights
+from app.corrections import (
+    is_excluded_loop_flight,
+    is_skippable_sheet,
+    repair_existing_flights,
+)
 from app.db import get_db
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
@@ -64,6 +68,8 @@ def api_index() -> dict:
             "GET /api/v1/uploads",
             "GET /api/v1/export/boardings.csv",
             "POST /api/v1/repair/cancelled",
+            "POST /api/v1/repair/dates",
+            "POST /api/v1/repair/siav-loops",
         ],
     }
 
@@ -83,6 +89,24 @@ def purge_cancelled_flights(
         fix_null_dates=False,
         fix_inconsistent_dates=False,
         remove_cancelled=True,
+        remove_siav_loops=False,
+        dry_run=dry_run,
+    )
+    return report.as_dict()
+
+
+@router.post("/repair/siav-loops")
+def purge_siav_loop_flights(
+    dry_run: bool = Query(True),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Remove SIAV→SIAV training flights that have passengers (API key auth)."""
+    report = repair_existing_flights(
+        db,
+        fix_null_dates=False,
+        fix_inconsistent_dates=False,
+        remove_cancelled=False,
+        remove_siav_loops=True,
         dry_run=dry_run,
     )
     return report.as_dict()
@@ -94,6 +118,7 @@ def repair_flight_dates_api(
     fix_null_dates: bool = Query(True),
     fix_inconsistent_dates: bool = Query(True),
     remove_cancelled: bool = Query(False),
+    remove_siav_loops: bool = Query(True),
     db: Session = Depends(get_db),
 ) -> dict:
     """Fix null/inconsistent flight dates from sheet DDMM tokens (API key auth).
@@ -105,6 +130,7 @@ def repair_flight_dates_api(
         fix_null_dates=fix_null_dates,
         fix_inconsistent_dates=fix_inconsistent_dates,
         remove_cancelled=remove_cancelled,
+        remove_siav_loops=remove_siav_loops,
         dry_run=dry_run,
     )
     return report.as_dict()
@@ -538,6 +564,12 @@ def export_boardings_csv(
         for row in db.execute(q).yield_per(500):
             # Never export cancelled manifesto tabs
             if is_skippable_sheet(row.sheet_name or ""):
+                continue
+            if is_excluded_loop_flight(
+                row.origin_code,
+                row.dest_code,
+                passenger_count=1,  # export rows are boardings ⇒ has passengers
+            ):
                 continue
             w.writerow(
                 [

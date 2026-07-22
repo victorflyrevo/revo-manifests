@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 # Portuguese month tokens as they appear in REVO filenames
@@ -103,6 +103,7 @@ class RepairReport:
     dates_fixed: int = 0
     cancelled_removed: int = 0
     duplicates_removed: int = 0
+    siav_loops_removed: int = 0
     fingerprint_collisions: int = 0
     unchanged: int = 0
     dry_run: bool = False
@@ -114,6 +115,7 @@ class RepairReport:
             "dates_fixed": self.dates_fixed,
             "cancelled_removed": self.cancelled_removed,
             "duplicates_removed": self.duplicates_removed,
+            "siav_loops_removed": self.siav_loops_removed,
             "fingerprint_collisions": self.fingerprint_collisions,
             "unchanged": self.unchanged,
             "dry_run": self.dry_run,
@@ -142,6 +144,20 @@ def is_skippable_sheet(sheet_name: str) -> bool:
         return True
     # "Cancelado 0101…", "0108 … (CANCELADO)", "… CANCELADO !", "… CANCELAD"
     return bool(re.search(r"\bcancel", folded))
+
+
+def is_excluded_loop_flight(
+    origin_code: Optional[str],
+    dest_code: Optional[str],
+    *,
+    passenger_count: int = 0,
+) -> bool:
+    """Business rule: SIAV→SIAV with passengers is training/local and must not count."""
+    o = (origin_code or "").strip().upper()
+    d = (dest_code or "").strip().upper()
+    if o == "SIAV" and d == "SIAV" and passenger_count > 0:
+        return True
+    return False
 
 
 def extract_sheet_ddmm(sheet_name: str) -> Optional[tuple[int, int]]:
@@ -356,10 +372,11 @@ def repair_existing_flights(
     fix_null_dates: bool = True,
     fix_inconsistent_dates: bool = True,
     remove_cancelled: bool = True,
+    remove_siav_loops: bool = True,
     dry_run: bool = False,
     sample_limit: int = 25,
 ) -> RepairReport:
-    """Fix dates / drop cancelled flights already stored in the database."""
+    """Fix dates / drop cancelled and SIAV→SIAV training flights already stored."""
     # Local import avoids circular dependency at module load
     from app.models import Boarding, Flight, Passenger
     from app.parser import flight_fingerprint
@@ -400,6 +417,36 @@ def repair_existing_flights(
                         "sheet_name": fl.sheet_name,
                         "source_file": fl.source_file,
                         "old_date": fl.flight_date.isoformat() if fl.flight_date else None,
+                    }
+                )
+            if not dry_run:
+                _delete_flight(fl)
+            continue
+
+        pax_count = fl.pax_count or 0
+        if pax_count <= 0:
+            # Prefer live boarding count when pax_count is stale/zero
+            pax_count = (
+                db.scalar(
+                    select(func.count())
+                    .select_from(Boarding)
+                    .where(Boarding.flight_id == fl.id)
+                )
+                or 0
+            )
+        if remove_siav_loops and is_excluded_loop_flight(
+            fl.origin_code, fl.dest_code, passenger_count=int(pax_count)
+        ):
+            report.siav_loops_removed += 1
+            if report.samples is not None and len(report.samples) < sample_limit:
+                report.samples.append(
+                    {
+                        "action": "remove_siav_loop",
+                        "flight_id": fl.id,
+                        "sheet_name": fl.sheet_name,
+                        "source_file": fl.source_file,
+                        "old_date": fl.flight_date.isoformat() if fl.flight_date else None,
+                        "pax_count": int(pax_count),
                     }
                 )
             if not dry_run:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.corrections import annotate_gap_hint
+from app.corrections import annotate_gap_hint, is_excluded_loop_flight
 from app.models import Boarding, Flight, Passenger, UploadBatch
 from app.parser import AIRPORT_CODE_MAX, ParseResult, content_hash, parse_bytes
 
@@ -48,13 +48,20 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
     since_commit = 0
 
     for fl in parsed.flights:
+        origin_code = _clip_code(fl.origin_code)
+        dest_code = _clip_code(fl.dest_code)
+        # Business rule: SIAV→SIAV with passengers = training, never count
+        if is_excluded_loop_flight(
+            origin_code, dest_code, passenger_count=len(fl.passengers)
+        ):
+            skipped += 1
+            continue
+
         prior = db.scalar(select(Flight.id).where(Flight.fingerprint == fl.fingerprint))
         if prior:
             skipped += 1
             continue
 
-        origin_code = _clip_code(fl.origin_code)
-        dest_code = _clip_code(fl.dest_code)
         flight = Flight(
             upload_id=batch.id,
             fingerprint=fl.fingerprint,

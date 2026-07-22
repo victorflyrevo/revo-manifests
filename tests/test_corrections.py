@@ -6,6 +6,7 @@ from datetime import date
 
 from app.corrections import (
     extract_sheet_ddmm,
+    is_excluded_loop_flight,
     is_skippable_sheet,
     parse_filename_period,
     resolve_flight_date,
@@ -117,3 +118,12 @@ def test_cell_literal_3006_parsed_as_30_june() -> None:
     assert resolve_flight_date("3006", "Voo OMB", "Mai-Jun_2025.xlsx") == date(
         2025, 6, 30
     )
+
+
+def test_siav_loop_with_passengers_excluded() -> None:
+    assert is_excluded_loop_flight("SIAV", "SIAV", passenger_count=3) is True
+    assert is_excluded_loop_flight("siav", "siav", passenger_count=1) is True
+    # Empty / no pax — not the training rule
+    assert is_excluded_loop_flight("SIAV", "SIAV", passenger_count=0) is False
+    assert is_excluded_loop_flight("SIAV", "SBGR", passenger_count=3) is False
+    assert is_excluded_loop_flight("SBGR", "SIAV", passenger_count=3) is False
