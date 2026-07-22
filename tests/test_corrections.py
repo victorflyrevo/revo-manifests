@@ -16,6 +16,10 @@ def test_skip_cancelled_and_template_sheets() -> None:
     assert is_skippable_sheet("Cancelado 0101 OOE1")
     assert is_skippable_sheet("CANCELADA 1503 OMB2")
     assert is_skippable_sheet("Cópia de Cancelado 0101 OOE1")
+    assert is_skippable_sheet("0108 SBSPxSJJY OMB1 (CANCELADO)")
+    assert is_skippable_sheet("0202 SIIRxSBGR OMB - CANCELADO !")
+    assert is_skippable_sheet("0103 SDMN x SBGR OMB - CANCELAD")  # truncated
+    assert is_skippable_sheet("0503 SBGR x SDXQ OOE CANCELADO")
     assert is_skippable_sheet("Base de Dados")
     assert is_skippable_sheet("XXXX template")
     assert not is_skippable_sheet("0101 OOE1 SSJ-SJK")

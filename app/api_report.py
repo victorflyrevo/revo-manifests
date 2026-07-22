@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import require_api_key
+from app.corrections import is_skippable_sheet, repair_existing_flights
 from app.db import get_db
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
@@ -62,8 +63,29 @@ def api_index() -> dict:
             "GET /api/v1/passengers",
             "GET /api/v1/uploads",
             "GET /api/v1/export/boardings.csv",
+            "POST /api/v1/repair/cancelled",
         ],
     }
+
+
+@router.post("/repair/cancelled")
+def purge_cancelled_flights(
+    dry_run: bool = Query(True),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Remove flights whose sheet name marks them as cancelled (API key auth).
+
+    Defaults to dry_run=true. Set dry_run=false to apply deletes and fix
+    passenger boarding counts.
+    """
+    report = repair_existing_flights(
+        db,
+        fix_null_dates=False,
+        fix_inconsistent_dates=False,
+        remove_cancelled=True,
+        dry_run=dry_run,
+    )
+    return report.as_dict()
 
 
 @router.get("/summary")
@@ -492,6 +514,9 @@ def export_boardings_csv(
         q = q.order_by(Boarding.flight_date.desc(), Boarding.id)
 
         for row in db.execute(q).yield_per(500):
+            # Never export cancelled manifesto tabs
+            if is_skippable_sheet(row.sheet_name or ""):
+                continue
             w.writerow(
                 [
                     row.flight_date.isoformat() if row.flight_date else "",
