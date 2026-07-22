@@ -16,6 +16,7 @@ from app.corrections import (
     is_skippable_sheet,
     repair_existing_flights,
 )
+from app.dedupe import repair_near_duplicate_flights, run_hygiene_protocol
 from app.db import get_db
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
@@ -70,6 +71,8 @@ def api_index() -> dict:
             "POST /api/v1/repair/cancelled",
             "POST /api/v1/repair/dates",
             "POST /api/v1/repair/siav-loops",
+            "POST /api/v1/repair/duplicates",
+            "POST /api/v1/repair/all",
         ],
     }
 
@@ -134,6 +137,32 @@ def repair_flight_dates_api(
         dry_run=dry_run,
     )
     return report.as_dict()
+
+
+@router.post("/repair/duplicates")
+def repair_near_duplicates_api(
+    dry_run: bool = Query(True),
+    min_jaccard: float = Query(0.5, ge=0.3, le=1.0),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Remove near-duplicate flights (same slot + passenger overlap)."""
+    report = repair_near_duplicate_flights(
+        db, min_jaccard=min_jaccard, dry_run=dry_run
+    )
+    return report.as_dict()
+
+
+@router.post("/repair/all")
+def repair_all_hygiene(
+    dry_run: bool = Query(True),
+    min_jaccard: float = Query(0.5, ge=0.3, le=1.0),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Run the full clean-base protocol (cancelled, SIAV loops, dates, duplicates).
+
+    Recommended after bulk uploads. Defaults to dry_run=true.
+    """
+    return run_hygiene_protocol(db, dry_run=dry_run, min_jaccard=min_jaccard)
 
 
 @router.get("/summary")
