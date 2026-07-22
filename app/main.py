@@ -24,6 +24,7 @@ from app.auth import (
     require_uploader,
 )
 from app.config import settings
+from app.customer_kpis import compute_customer_kpis
 from app.db import SessionLocal, get_db, init_db
 from app.ingest import ingest_workbook
 from app.models import Boarding, Flight, Passenger, UploadBatch
@@ -526,6 +527,12 @@ def stats_summary(
         "one_time_passengers": max(unique - recurring, 0),
         "recurrence_rate_pct": round((recurring / unique * 100), 1) if unique else 0,
     }
+
+
+@app.get("/api/stats/customers-kpis")
+def stats_customers_kpis(months: int = 12, db: Session = Depends(get_db)) -> dict:
+    """Legacy alias for cumulative unique growth + LTM repeat rate by month."""
+    return compute_customer_kpis(db, months=months)
 
 
 @app.get("/api/stats/monthly")

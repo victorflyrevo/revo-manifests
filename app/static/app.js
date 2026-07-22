@@ -232,5 +232,188 @@ async function refreshUploadLog() {
   }
 }
 
+function drawLineChart(canvas, points, opts) {
+  const values = points.map((p) => p.y);
+  const labels = points.map((p) => p.x);
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || canvas.width;
+  const cssH = canvas.clientHeight || 220;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const pad = { t: 16, r: 14, b: 28, l: 40 };
+  const w = cssW - pad.l - pad.r;
+  const h = cssH - pad.t - pad.b;
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  if (!values.length) {
+    ctx.fillStyle = "#9aa89a";
+    ctx.font = "13px IBM Plex Sans, sans-serif";
+    ctx.fillText("No data yet", pad.l, pad.t + 20);
+    return;
+  }
+
+  const minV = opts.min != null ? opts.min : Math.min(...values, 0);
+  const maxV = opts.max != null ? opts.max : Math.max(...values, 1);
+  const span = maxV - minV || 1;
+
+  ctx.strokeStyle = "#2c382f";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + (h * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y);
+    ctx.lineTo(pad.l + w, y);
+    ctx.stroke();
+    const val = maxV - (span * i) / 4;
+    ctx.fillStyle = "#9aa89a";
+    ctx.font = "11px IBM Plex Sans, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(
+      opts.formatY ? opts.formatY(val) : String(Math.round(val)),
+      pad.l - 6,
+      y + 3
+    );
+  }
+
+  const xAt = (i) =>
+    pad.l + (values.length === 1 ? w / 2 : (w * i) / (values.length - 1));
+  const yAt = (v) => pad.t + h - ((v - minV) / span) * h;
+
+  if (opts.fill) {
+    ctx.beginPath();
+    values.forEach((v, i) => {
+      const x = xAt(i);
+      const y = yAt(v);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.lineTo(xAt(values.length - 1), pad.t + h);
+    ctx.lineTo(xAt(0), pad.t + h);
+    ctx.closePath();
+    ctx.fillStyle = opts.fill;
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = opts.color || "#c4a35a";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const x = xAt(i);
+    const y = yAt(v);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  values.forEach((v, i) => {
+    ctx.beginPath();
+    ctx.fillStyle = opts.color || "#c4a35a";
+    ctx.arc(xAt(i), yAt(v), 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = "#9aa89a";
+  ctx.font = "10px IBM Plex Sans, sans-serif";
+  ctx.textAlign = "center";
+  const step = values.length > 8 ? 2 : 1;
+  labels.forEach((lab, i) => {
+    if (i % step !== 0 && i !== labels.length - 1) return;
+    const short = lab.length >= 7 ? lab.slice(2) : lab;
+    ctx.fillText(short, xAt(i), cssH - 8);
+  });
+}
+
+async function loadCustomerKpis() {
+  const rangeEl = document.getElementById("kpi-range");
+  const tbody = document.querySelector("#kpi-table tbody");
+  if (!rangeEl || !tbody) return;
+
+  try {
+    const res = await fetch("/api/stats/customers-kpis?months=12", {
+      credentials: "same-origin",
+    });
+    if (res.status === 401) {
+      location.href = "/login";
+      return;
+    }
+    if (!res.ok) throw new Error("KPI request failed");
+    const data = await res.json();
+    const s = data.summary || {};
+    const monthly = data.monthly || [];
+
+    if (!monthly.length) {
+      rangeEl.textContent = "No boarding history yet";
+      return;
+    }
+
+    rangeEl.textContent =
+      data.data_start && data.data_end
+        ? `History ${data.data_start} → ${data.data_end} · ${data.months_available} mo`
+        : `${data.months_available} months`;
+
+    document.getElementById("kpi-unique").textContent = String(
+      s.unique_customers_ltm ?? "—"
+    );
+    document.getElementById("kpi-repeat").textContent =
+      s.repeat_rate_pct != null ? `${s.repeat_rate_pct}%` : "—";
+    document.getElementById("kpi-new").textContent = String(
+      s.new_customers_ltm ?? "—"
+    );
+    document.getElementById("kpi-repeaters").textContent = String(
+      s.repeat_customers_ltm ?? "—"
+    );
+
+    tbody.innerHTML = monthly
+      .map(
+        (r) => `<tr>
+        <td>${r.month}</td>
+        <td>${r.new_customers}</td>
+        <td>${r.cumulative_unique_customers}</td>
+        <td>${r.ltm_unique_customers}</td>
+        <td>${r.ltm_repeat_customers}</td>
+        <td>${r.repeat_rate_pct}%</td>
+      </tr>`
+      )
+      .join("");
+
+    const cumCanvas = document.getElementById("chart-cumulative");
+    const repCanvas = document.getElementById("chart-repeat");
+    drawLineChart(
+      cumCanvas,
+      monthly.map((r) => ({
+        x: r.month,
+        y: r.cumulative_unique_customers,
+      })),
+      {
+        color: "#c4a35a",
+        fill: "rgba(196, 163, 90, 0.12)",
+        min: 0,
+      }
+    );
+    drawLineChart(
+      repCanvas,
+      monthly.map((r) => ({ x: r.month, y: r.repeat_rate_pct })),
+      {
+        color: "#7cb89a",
+        fill: "rgba(124, 184, 154, 0.12)",
+        min: 0,
+        max: 100,
+        formatY: (v) => `${Math.round(v)}%`,
+      }
+    );
+  } catch (_) {
+    rangeEl.textContent = "Could not load KPIs";
+  }
+}
+
 renderSelectedFiles();
 refreshUploadLog();
+loadCustomerKpis();
+window.addEventListener("resize", () => {
+  // Redraw charts at the new width without another fetch
+  const tbody = document.querySelector("#kpi-table tbody");
+  if (tbody && tbody.children.length) loadCustomerKpis();
+});

@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import require_api_key
+from app.customer_kpis import compute_customer_kpis
 from app.db import get_db
 from app.models import Boarding, Flight, Passenger, UploadBatch
 
@@ -55,6 +56,7 @@ def api_index() -> dict:
         "endpoints": [
             "GET /api/v1/summary",
             "GET /api/v1/monthly",
+            "GET /api/v1/customers/kpis",
             "GET /api/v1/routes",
             "GET /api/v1/passengers/top",
             "GET /api/v1/flights",
@@ -64,6 +66,24 @@ def api_index() -> dict:
             "GET /api/v1/export/boardings.csv",
         ],
     }
+
+
+@router.get("/customers/kpis")
+def customers_kpis(
+    months: int = Query(
+        12,
+        ge=1,
+        le=120,
+        description="Rolling window length in calendar months (default 12 = LTM)",
+    ),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cumulative unique-customer growth + month-by-month LTM repeat rate.
+
+    Uses the longest boarding history available in the database. The series
+    ends on the latest month with data (not necessarily calendar today).
+    """
+    return compute_customer_kpis(db, months=months)
 
 
 @router.get("/summary")

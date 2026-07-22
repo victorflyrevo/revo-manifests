@@ -42,6 +42,61 @@
       </article>
     </section>
 
+    <section class="card" id="customer-kpis">
+      <div class="row">
+        <h2>Customer KPIs · last 12 months</h2>
+        <span class="muted" id="kpi-range">Loading…</span>
+      </div>
+      <p class="muted">
+        Cumulative unique customers (first flight in the window) and month-by-month
+        repeat rate — passengers with ≥2 boardings in the rolling 12 months ending
+        each month. Uses the longest boarding history available in the database.
+      </p>
+      <div class="stats kpi-summary" id="kpi-summary">
+        <article>
+          <span class="label">Unique LTM</span>
+          <strong id="kpi-unique">—</strong>
+        </article>
+        <article>
+          <span class="label">Repeat rate</span>
+          <strong id="kpi-repeat">—</strong>
+        </article>
+        <article>
+          <span class="label">New in LTM</span>
+          <strong id="kpi-new">—</strong>
+        </article>
+        <article>
+          <span class="label">Repeaters LTM</span>
+          <strong id="kpi-repeaters">—</strong>
+        </article>
+      </div>
+      <div class="kpi-charts">
+        <div class="kpi-chart">
+          <h3>Cumulative unique customers</h3>
+          <canvas id="chart-cumulative" width="640" height="220" aria-label="Cumulative unique customers chart"></canvas>
+        </div>
+        <div class="kpi-chart">
+          <h3>Repeat rate by month</h3>
+          <canvas id="chart-repeat" width="640" height="220" aria-label="Repeat rate by month chart"></canvas>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="kpi-table">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>New</th>
+              <th>Cumulative</th>
+              <th>LTM unique</th>
+              <th>LTM repeaters</th>
+              <th>Repeat %</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="card">
       <h2>Upload workbooks</h2>
       <p class="muted">
@@ -106,6 +161,7 @@
       <ul class="api">
         <li><code>GET /api/v1/summary?days=365</code></li>
         <li><code>GET /api/v1/monthly</code></li>
+        <li><code>GET /api/v1/customers/kpis?months=12</code></li>
         <li><code>GET /api/v1/routes?days=365</code></li>
         <li><code>GET /api/v1/passengers/top?days=365</code></li>
         <li><code>GET /api/v1/flights?start_date=2025-07-01&amp;end_date=2026-07-01</code></li>

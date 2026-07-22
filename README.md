@@ -56,6 +56,7 @@ If `API_KEY` is empty (local default), the API is open.
 |---|---|
 | `GET /api/v1/summary?days=365` | KPI window (or `start_date` / `end_date`) |
 | `GET /api/v1/monthly` | Boardings / flights / uniques by month |
+| `GET /api/v1/customers/kpis?months=12` | Cumulative unique growth + monthly LTM repeat rate (uses full history) |
 | `GET /api/v1/routes` | Top OD routes |
 | `GET /api/v1/passengers/top` | Most frequent passengers |
 | `GET /api/v1/flights` | Paginated flights (`limit`, `offset`, filters) |
