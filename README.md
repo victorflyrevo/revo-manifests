@@ -4,8 +4,8 @@ Upload REVO manifesto Excel workbooks, parse each sheet as a flight, and store f
 
 ## What it does
 
-1. You upload one or more `.xlsx` manifesto files in the web UI  
-2. Each sheet (except templates like `Base de Dados` / `xxxx…`) becomes a **flight**  
+1. You upload one or more `.xlsx` manifesto files or `.csv` Base de Dados exports in the web UI  
+2. Each Excel sheet (except templates like `Base de Dados` / `xxxx…`) or CSV flight group becomes a **flight**  
 3. Passengers are upserted by document (or normalized name)  
 4. Duplicate files/flights are skipped via content hash + flight fingerprint  
 5. Dashboard/API endpoints expose monthly trends, unique/recurring passengers, routes  
@@ -73,7 +73,9 @@ curl -H "X-API-Key: $API_KEY" \
 
 Legacy aliases still work under `/api/stats/*` (no key required for now).
 
-Upload: `POST /api/upload` (multipart field `file`).
+Upload: `POST /api/upload` (multipart field `file` — `.xlsx` / `.xlsm` / `.xls` / `.csv`).
+
+CSV ingest accepts a flat Base de Dados table (columns such as `Data`, `Hora`, `Origem`, `Destino`, `Nome`, `Documento`, `Matrícula` — comma or semicolon) or a single manifesto-style sheet export. Rows are grouped into flights by date/time/route/aircraft.
 
 ## Security note
 

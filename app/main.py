@@ -370,12 +370,14 @@ async def upload_manifest(
     file: UploadFile = File(...),
     _claims: dict = Depends(require_uploader),
 ) -> JSONResponse:
-    """Accept one workbook and process every flight sheet (no sheet-count limit)."""
+    """Accept one workbook or CSV base and process every flight (no sheet-count limit)."""
     if not file.filename:
         raise HTTPException(400, "Missing filename")
     lower = file.filename.lower()
-    if not lower.endswith((".xlsx", ".xlsm", ".xls")):
-        raise HTTPException(400, "Only Excel files (.xlsx) are supported")
+    if not lower.endswith((".xlsx", ".xlsm", ".xls", ".csv")):
+        raise HTTPException(
+            400, "Only Excel (.xlsx/.xlsm/.xls) or CSV (.csv) files are supported"
+        )
 
     data = await file.read()
     if settings.max_upload_mb > 0:
@@ -389,7 +391,7 @@ async def upload_manifest(
             _executor, _ingest_in_thread, data, file.filename
         )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"Failed to parse workbook: {exc}") from exc
+        raise HTTPException(500, f"Failed to parse file: {exc}") from exc
 
     return JSONResponse(
         {
@@ -412,20 +414,20 @@ async def upload_manifests_batch(
     files: list[UploadFile] = File(...),
     _claims: dict = Depends(require_uploader),
 ) -> JSONResponse:
-    """Upload many workbooks at once; each is fully processed, all sheets included."""
+    """Upload many workbooks/CSVs at once; each is fully processed."""
     if not files:
         raise HTTPException(400, "No files provided")
 
     results = []
     for file in files:
         if not file.filename or not file.filename.lower().endswith(
-            (".xlsx", ".xlsm", ".xls")
+            (".xlsx", ".xlsm", ".xls", ".csv")
         ):
             results.append(
                 {
                     "filename": file.filename or "(unknown)",
                     "status": "error",
-                    "error": "Only Excel files (.xlsx) are supported",
+                    "error": "Only Excel (.xlsx/.xlsm/.xls) or CSV (.csv) files are supported",
                 }
             )
             continue
