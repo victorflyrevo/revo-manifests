@@ -102,6 +102,7 @@ class RepairReport:
     scanned: int = 0
     dates_fixed: int = 0
     cancelled_removed: int = 0
+    duplicates_removed: int = 0
     fingerprint_collisions: int = 0
     unchanged: int = 0
     dry_run: bool = False
@@ -112,6 +113,7 @@ class RepairReport:
             "scanned": self.scanned,
             "dates_fixed": self.dates_fixed,
             "cancelled_removed": self.cancelled_removed,
+            "duplicates_removed": self.duplicates_removed,
             "fingerprint_collisions": self.fingerprint_collisions,
             "unchanged": self.unchanged,
             "dry_run": self.dry_run,
@@ -367,6 +369,26 @@ def repair_existing_flights(
     flights = list(db.scalars(select(Flight)).all())
     report.scanned = len(flights)
 
+    def _delete_flight(flight: Flight) -> None:
+        pax_ids = list(
+            db.scalars(
+                select(Boarding.passenger_id).where(Boarding.flight_id == flight.id)
+            ).all()
+        )
+        db.delete(flight)
+        db.flush()
+        for pid in pax_ids:
+            pax = db.get(Passenger, pid)
+            if not pax:
+                continue
+            remaining = list(
+                db.scalars(select(Boarding).where(Boarding.passenger_id == pid)).all()
+            )
+            pax.total_boardings = len(remaining)
+            dates = [b.flight_date for b in remaining if b.flight_date]
+            pax.first_seen = min(dates) if dates else None
+            pax.last_seen = max(dates) if dates else None
+
     for fl in flights:
         if remove_cancelled and is_skippable_sheet(fl.sheet_name):
             report.cancelled_removed += 1
@@ -381,27 +403,7 @@ def repair_existing_flights(
                     }
                 )
             if not dry_run:
-                # Adjust passenger boarding counts before cascade delete
-                pax_ids = list(
-                    db.scalars(
-                        select(Boarding.passenger_id).where(Boarding.flight_id == fl.id)
-                    ).all()
-                )
-                db.delete(fl)
-                db.flush()
-                for pid in pax_ids:
-                    pax = db.get(Passenger, pid)
-                    if not pax:
-                        continue
-                    remaining = list(
-                        db.scalars(
-                            select(Boarding).where(Boarding.passenger_id == pid)
-                        ).all()
-                    )
-                    pax.total_boardings = len(remaining)
-                    dates = [b.flight_date for b in remaining if b.flight_date]
-                    pax.first_seen = min(dates) if dates else None
-                    pax.last_seen = max(dates) if dates else None
+                _delete_flight(fl)
             continue
 
         if not fix_null_dates and not fix_inconsistent_dates:
@@ -422,8 +424,7 @@ def repair_existing_flights(
         if fix_null_dates and fl.flight_date is None:
             needs_fix = True
         elif fix_inconsistent_dates and fl.flight_date != new_date:
-            # Only rewrite when sheet DDMM disagrees with stored day/month
-            # or year is more than 1 away from filename hint
+            # Trust sheet DDMM: any day/month mismatch or resolved date drift
             dd, mm = ddmm
             stored = fl.flight_date
             yh = year_hint_from_filename(fl.source_file)
@@ -431,7 +432,7 @@ def repair_existing_flights(
                 needs_fix = True
             elif yh is not None and abs(stored.year - yh) > 1:
                 needs_fix = True
-            elif stored != new_date and abs((stored - new_date).days) >= 28:
+            elif stored != new_date:
                 needs_fix = True
 
         if not needs_fix:
@@ -481,21 +482,24 @@ def repair_existing_flights(
                 )
             )
             if clash:
-                report.fingerprint_collisions += 1
+                # Correct flight already exists — drop this wrong-dated duplicate
+                report.duplicates_removed += 1
                 if report.samples is not None and len(report.samples) < sample_limit:
                     report.samples.append(
                         {
-                            "action": "fingerprint_collision",
+                            "action": "remove_duplicate_wrong_date",
                             "flight_id": fl.id,
-                            "clash_flight_id": clash,
+                            "kept_flight_id": clash,
                             "sheet_name": fl.sheet_name,
                             "source_file": fl.source_file,
                             "old_date": fl.flight_date.isoformat()
                             if fl.flight_date
                             else None,
-                            "new_date": new_date.isoformat(),
+                            "correct_date": new_date.isoformat(),
                         }
                     )
+                if not dry_run:
+                    _delete_flight(fl)
                 continue
 
         report.dates_fixed += 1
