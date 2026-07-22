@@ -317,7 +317,12 @@ def _best_date_for_ddmm(
     if period is None:
         yh = year_hint_from_filename(filename)
         if yh is None:
-            return cell_date
+            # Filenames like "Manifesto REVO 3.xlsx" carry no year — use cell year
+            # with the sheet DDMM day/month (sheet wins over a drifting cell day).
+            if cell_date is not None:
+                snapped = _safe_date(cell_date.year, mm, dd)
+                return snapped or cell_date
+            return None
         period = FilenamePeriod(year=yh, start_month=1, end_month=12)
 
     candidates: list[date] = []

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.corrections import annotate_gap_hint, is_excluded_loop_flight
+from app.dedupe import repair_near_duplicate_flights
 from app.models import Boarding, Flight, Passenger, UploadBatch
 from app.parser import AIRPORT_CODE_MAX, ParseResult, content_hash, parse_bytes
 
@@ -157,6 +158,23 @@ def ingest_workbook(db: Session, data: bytes, filename: str) -> UploadBatch:
     gap = annotate_gap_hint(filename, last_date)
     if gap:
         notes.append(gap)
+
+    # Hygiene: collapse near-duplicates that overlap this upload with prior data
+    dedupe = repair_near_duplicate_flights(
+        db,
+        min_jaccard=0.5,
+        dry_run=False,
+        only_source_file=filename,
+        sample_limit=5,
+    )
+    if dedupe.flights_removed:
+        notes.append(
+            f"Hygiene removed {dedupe.flights_removed} near-duplicate flight(s) "
+            f"({dedupe.boardings_removed} boarding overlap(s))."
+        )
+        # Refresh batch counters after deletes (inserted stays historical for this run)
+        batch = db.get(UploadBatch, batch.id)  # type: ignore[assignment]
+
     batch.notes = " ".join(notes)
     db.commit()
     db.refresh(batch)

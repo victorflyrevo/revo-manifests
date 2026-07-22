@@ -120,6 +120,14 @@ def test_cell_literal_3006_parsed_as_30_june() -> None:
     )
 
 
+def test_yearless_filename_uses_cell_year_with_sheet_ddmm() -> None:
+    # "Manifesto REVO 3.xlsx" has no year; sheet 1709 + cell 2024-09-19 → 2024-09-17
+    cell = date(2024, 9, 19)
+    assert resolve_flight_date(cell, "1709 SDH9 X SDXQ", "Manifesto REVO 3.xlsx") == date(
+        2024, 9, 17
+    )
+
+
 def test_siav_loop_with_passengers_excluded() -> None:
     assert is_excluded_loop_flight("SIAV", "SIAV", passenger_count=3) is True
     assert is_excluded_loop_flight("siav", "siav", passenger_count=1) is True
