@@ -795,29 +795,6 @@ HTML = r'''<!DOCTYPE html>
     <div class="kpis" id="baseKpis"></div>
   </section>
 
-  <section id="sfHoursSection" hidden>
-    <h2>Shuttle equivalent · horas voadas (Salesforce)</h2>
-    <p class="help" id="sfHoursHelp"></p>
-    <div class="kpis" id="sfHoursKpis"></div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Mês</th>
-            <th class="num">Horas total</th>
-            <th class="num">SBGR</th>
-            <th class="num">Resto</th>
-            <th class="num">% SBGR</th>
-            <th class="num">Shuttle</th>
-            <th class="num">Shuttle∩SBGR</th>
-            <th class="num">Voos</th>
-          </tr>
-        </thead>
-        <tbody id="sfHoursBody"></tbody>
-      </table>
-    </div>
-  </section>
-
   <section id="sfRevenueSection" hidden>
     <h2>Base de vendas · corporate mobility</h2>
     <p class="help" id="sfRevenueHelp">Evolução do faturamento (mês do voo) e quanto disso é corporate mobility (PJ).</p>
@@ -837,6 +814,29 @@ HTML = r'''<!DOCTYPE html>
           </tr>
         </thead>
         <tbody id="sfRevMonthBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="sfHoursSection" hidden>
+    <h2>Shuttle equivalent · horas voadas (Salesforce)</h2>
+    <p class="help" id="sfHoursHelp"></p>
+    <div class="kpis" id="sfHoursKpis"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mês</th>
+            <th class="num">Horas total</th>
+            <th class="num">SBGR</th>
+            <th class="num">Resto</th>
+            <th class="num">% SBGR</th>
+            <th class="num">Shuttle</th>
+            <th class="num">Shuttle∩SBGR</th>
+            <th class="num">Voos</th>
+          </tr>
+        </thead>
+        <tbody id="sfHoursBody"></tbody>
       </table>
     </div>
   </section>
