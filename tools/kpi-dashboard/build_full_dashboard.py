@@ -135,6 +135,62 @@ def fetch_api(base: str, api_key: str) -> tuple[str, dict, list, list, list]:
 # Longest available operational window (includes 2024 uploads)
 BASE_START = date(2024, 1, 1)
 
+# Fixed reference cuts for the recurrence report
+SNAPSHOT_SPECS = (
+    ("2026-06", "Jun/2026 (atual)"),
+    ("2025-12", "Dez/2025"),
+    ("2024-12", "Dez/2024"),
+)
+
+
+def month_minus_years(label: str, years: int = 1) -> str:
+    y, m = label.split("-")
+    return f"{int(y) - years}-{m}"
+
+
+def ltm_freq_metrics(ltm_counts: dict[int, int]) -> dict[str, Any]:
+    """Passenger frequency distribution inside an LTM boarding window."""
+    freq_1 = freq_2 = freq_3 = freq_4 = freq_5plus = 0
+    ge2 = ge4 = 0
+    for n in ltm_counts.values():
+        if n >= 2:
+            ge2 += 1
+        if n >= 4:
+            ge4 += 1
+        if n <= 1:
+            freq_1 += 1
+        elif n == 2:
+            freq_2 += 1
+        elif n == 3:
+            freq_3 += 1
+        elif n == 4:
+            freq_4 += 1
+        else:
+            freq_5plus += 1
+    unique = len(ltm_counts)
+    ge2_pct = round(ge2 / unique * 100, 1) if unique else 0.0
+    ge4_pct = round(ge4 / unique * 100, 1) if unique else 0.0
+    return {
+        "ltm_unique_customers": unique,
+        "ltm_repeat_customers": ge2,
+        "ltm_ge2": ge2,
+        "ltm_ge4": ge4,
+        "ltm_ge2_pct": ge2_pct,
+        "ltm_ge4_pct": ge4_pct,
+        "repeat_rate_pct": ge2_pct,
+        "ltm_freq_1": freq_1,
+        "ltm_freq_2": freq_2,
+        "ltm_freq_3": freq_3,
+        "ltm_freq_4": freq_4,
+        "ltm_freq_5plus": freq_5plus,
+    }
+
+
+def _delta(curr: Optional[int], prev: Optional[int]) -> Optional[int]:
+    if curr is None or prev is None:
+        return None
+    return curr - prev
+
 
 def _mission_legs_from_rows(payload_rows: list[dict], base_start: date) -> list[MissionLeg]:
     """One MissionLeg per distinct flight_id in the filtered window."""
@@ -281,9 +337,7 @@ def compute(
             n = sum(1 for d in dates if win_start <= d <= m_end)
             if n:
                 ltm_counts[pid] = n
-        ltm_unique = len(ltm_counts)
-        ltm_repeat = sum(1 for n in ltm_counts.values() if n >= 2)
-        repeat_pct = round(ltm_repeat / ltm_unique * 100, 1) if ltm_unique else 0.0
+        freq = ltm_freq_metrics(ltm_counts)
 
         row = {
             "month": label,
@@ -296,9 +350,7 @@ def compute(
             "flight_legs": legs_m,
             "has_activity": has_activity,
             "data_gap": data_gap,
-            "ltm_unique_customers": ltm_unique,
-            "ltm_repeat_customers": ltm_repeat,
-            "repeat_rate_pct": repeat_pct,
+            **freq,
             "window_start": win_start.isoformat(),
             "window_end": m_end.isoformat(),
             "mom_new_pct": None,
@@ -311,6 +363,10 @@ def compute(
             "yoy_cumulative_pct": None,
             "mom_vs_month": None,
             "yoy_vs_month": None,
+            "ltm_ge2_delta_vs_12m": None,
+            "ltm_ge4_delta_vs_12m": None,
+            "ltm_unique_delta_vs_12m": None,
+            "ltm_vs_month": None,
         }
 
         # MoM / YoY on CUMULATIVE unique (primary growth view)
@@ -353,9 +409,85 @@ def compute(
         if has_activity:
             prev_active = row
 
+    # Attach LTM deltas vs the same calendar month 12 months earlier
+    by_month = {r["month"]: r for r in monthly}
+    for r in monthly:
+        prev_label = month_minus_years(r["month"], 1)
+        prev = by_month.get(prev_label)
+        if not prev:
+            continue
+        r["ltm_vs_month"] = prev_label
+        r["ltm_unique_delta_vs_12m"] = _delta(
+            r["ltm_unique_customers"], prev["ltm_unique_customers"]
+        )
+        r["ltm_ge2_delta_vs_12m"] = _delta(r["ltm_ge2"], prev["ltm_ge2"])
+        r["ltm_ge4_delta_vs_12m"] = _delta(r["ltm_ge4"], prev["ltm_ge4"])
+
     active_months = [r for r in monthly if r["has_activity"]]
     last = active_months[-1] if active_months else monthly[-1]
     yoy_points = [r for r in monthly if r["yoy_cumulative_pct"] is not None]
+
+    def _snapshot_from_row(label: str, title: str, row: Optional[dict]) -> dict:
+        if not row:
+            return {
+                "month": label,
+                "label": title,
+                "available": False,
+                "window_start": None,
+                "window_end": None,
+                "data_gap": f"sem dados para {label}",
+                "ltm_unique_customers": None,
+                "ltm_ge2": None,
+                "ltm_ge4": None,
+                "ltm_ge2_pct": None,
+                "ltm_ge4_pct": None,
+                "ltm_freq_1": None,
+                "ltm_freq_2": None,
+                "ltm_freq_3": None,
+                "ltm_freq_4": None,
+                "ltm_freq_5plus": None,
+                "ltm_vs_month": None,
+                "ltm_unique_delta_vs_12m": None,
+                "ltm_ge2_delta_vs_12m": None,
+                "ltm_ge4_delta_vs_12m": None,
+                "prev_ltm_ge2": None,
+                "prev_ltm_ge4": None,
+            }
+        prev_label = row.get("ltm_vs_month")
+        prev = by_month.get(prev_label) if prev_label else None
+        return {
+            "month": label,
+            "label": title,
+            "available": True,
+            "window_start": row["window_start"],
+            "window_end": row["window_end"],
+            "data_gap": row.get("data_gap"),
+            "has_activity": row.get("has_activity"),
+            "ltm_unique_customers": row["ltm_unique_customers"],
+            "ltm_ge2": row["ltm_ge2"],
+            "ltm_ge4": row["ltm_ge4"],
+            "ltm_ge2_pct": row["ltm_ge2_pct"],
+            "ltm_ge4_pct": row["ltm_ge4_pct"],
+            "ltm_freq_1": row["ltm_freq_1"],
+            "ltm_freq_2": row["ltm_freq_2"],
+            "ltm_freq_3": row["ltm_freq_3"],
+            "ltm_freq_4": row["ltm_freq_4"],
+            "ltm_freq_5plus": row["ltm_freq_5plus"],
+            "ltm_vs_month": prev_label,
+            "ltm_unique_delta_vs_12m": row.get("ltm_unique_delta_vs_12m"),
+            "ltm_ge2_delta_vs_12m": row.get("ltm_ge2_delta_vs_12m"),
+            "ltm_ge4_delta_vs_12m": row.get("ltm_ge4_delta_vs_12m"),
+            "prev_ltm_ge2": prev["ltm_ge2"] if prev else None,
+            "prev_ltm_ge4": prev["ltm_ge4"] if prev else None,
+            "prev_ltm_unique": prev["ltm_unique_customers"] if prev else None,
+        }
+
+    # Prefer planned Jun/2026 cut when present; else latest active month for headlines
+    preferred_latest = by_month.get("2026-06") or last
+    snapshots = [
+        _snapshot_from_row(label, title, by_month.get(label))
+        for label, title in SNAPSHOT_SPECS
+    ]
 
     # Recompute headline KPIs on the filtered window (not raw API all-time)
     uniques_window = len(first_seen)
@@ -369,9 +501,9 @@ def compute(
 
     # LTM missions (ending at latest active month) — by mission date
     ltm_mission_total = 0
-    if last:
-        ltm_start = date.fromisoformat(last["window_start"])
-        ltm_end = date.fromisoformat(last["window_end"])
+    if preferred_latest:
+        ltm_start = date.fromisoformat(preferred_latest["window_start"])
+        ltm_end = date.fromisoformat(preferred_latest["window_end"])
         ltm_mission_total = sum(
             1
             for m in assign_missions(_mission_legs_from_rows(payload_rows, base_start))
@@ -396,18 +528,46 @@ def compute(
             "recurring_all_time": repeaters_window,
             "recurrence_rate_all_time": recurrence_window,
             "cumulative_unique_end": last["cumulative_unique_customers"],
-            "latest_month": last["month"],
+            "latest_month": preferred_latest["month"],
             "latest_mom_cumulative_pct": last["mom_cumulative_pct"],
             "latest_yoy_cumulative_pct": last["yoy_cumulative_pct"],
             "latest_mom_unique_pct": last["mom_unique_pct"],
             "latest_mom_boardings_pct": last["mom_boardings_pct"],
             "latest_yoy_unique_pct": last["yoy_unique_pct"],
             "latest_yoy_boardings_pct": last["yoy_boardings_pct"],
-            "ltm_unique_customers": last["ltm_unique_customers"],
-            "ltm_repeat_rate_pct": last["repeat_rate_pct"],
+            "ltm_unique_customers": preferred_latest["ltm_unique_customers"],
+            "ltm_repeat_customers": preferred_latest["ltm_ge2"],
+            "ltm_ge2": preferred_latest["ltm_ge2"],
+            "ltm_ge4": preferred_latest["ltm_ge4"],
+            "ltm_ge2_pct": preferred_latest["ltm_ge2_pct"],
+            "ltm_ge4_pct": preferred_latest["ltm_ge4_pct"],
+            "ltm_repeat_rate_pct": preferred_latest["repeat_rate_pct"],
+            "ltm_freq_1": preferred_latest["ltm_freq_1"],
+            "ltm_freq_2": preferred_latest["ltm_freq_2"],
+            "ltm_freq_3": preferred_latest["ltm_freq_3"],
+            "ltm_freq_4": preferred_latest["ltm_freq_4"],
+            "ltm_freq_5plus": preferred_latest["ltm_freq_5plus"],
+            "ltm_window_start": preferred_latest["window_start"],
+            "ltm_window_end": preferred_latest["window_end"],
+            "ltm_vs_month": preferred_latest.get("ltm_vs_month"),
+            "ltm_unique_delta_vs_12m": preferred_latest.get("ltm_unique_delta_vs_12m"),
+            "ltm_ge2_delta_vs_12m": preferred_latest.get("ltm_ge2_delta_vs_12m"),
+            "ltm_ge4_delta_vs_12m": preferred_latest.get("ltm_ge4_delta_vs_12m"),
+            "prev_ltm_ge2": (
+                by_month[preferred_latest["ltm_vs_month"]]["ltm_ge2"]
+                if preferred_latest.get("ltm_vs_month") in by_month
+                else None
+            ),
+            "prev_ltm_ge4": (
+                by_month[preferred_latest["ltm_vs_month"]]["ltm_ge4"]
+                if preferred_latest.get("ltm_vs_month") in by_month
+                else None
+            ),
+            "latest_data_gap": preferred_latest.get("data_gap"),
             "yoy_months_available": len(yoy_points),
             "api_unique_unfiltered": summary.get("unique_passengers"),
         },
+        "snapshots": snapshots,
         "monthly": monthly,
         "top_routes": routes,
         "top_passengers": [
@@ -429,7 +589,7 @@ HTML = r'''<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>REVO · Customer growth (MoM / YoY)</title>
+  <title>REVO · Recorrência LTM</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="./data.js"></script>
   <style>
@@ -452,6 +612,10 @@ HTML = r'''<!DOCTYPE html>
     .lede { color: var(--muted); max-width: 46em; line-height: 1.5; margin: 10px 0 0; }
     .meta { margin-top: 12px; color: var(--muted); font-size: 0.9rem; }
     .meta a { color: var(--a); }
+    .alert {
+      margin: 16px 0 0; padding: 10px 12px; border: 1px solid #e2c49a;
+      background: #fff6e8; color: #6a4a1a; font-size: 0.9rem;
+    }
     .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 26px 0; }
     .kpis article { background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; }
     .kpis .label { display: block; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
@@ -477,12 +641,70 @@ HTML = r'''<!DOCTYPE html>
 <main>
   <header>
     <h1>REVO</h1>
-    <p class="lede">Crescimento de clientes a partir de janeiro/2024 (API Manifests) — cumulativo, MoM e YoY. SIAV→SIAV excluídos. Meses incompletos aparecem com alerta.</p>
+    <p class="lede">Recorrência LTM (últimos 12 meses): quantos passageiros voaram 1×, 2×, 3×, 4× e 5+. Cortes-chave ≥2 e ≥4, com delta vs o LTM de 12 meses atrás. SIAV→SIAV excluídos.</p>
     <p class="meta" id="meta"></p>
-    <p class="meta"><a href="./revo-customer-kpis.xlsx">Baixar Excel com gráficos</a></p>
+    <p class="meta"><a href="./revo-customer-kpis.xlsx">Baixar Excel</a></p>
+    <p class="alert" id="gapAlert" hidden></p>
   </header>
 
+  <section>
+    <h2>Recorrência LTM</h2>
+    <p class="help" id="ltmHelp"></p>
+    <div class="kpis" id="recKpis"></div>
+  </section>
+
+  <section>
+    <h2>Distribuição por frequência (LTM atual)</h2>
+    <p class="help">Passageiros únicos no LTM agrupados pelo nº de boardings na janela.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Frequência</th>
+            <th class="num">Passageiros</th>
+            <th class="num">% do LTM</th>
+          </tr>
+        </thead>
+        <tbody id="freqBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Snapshots · Jun/2026 · Dez/2025 · Dez/2024</h2>
+    <p class="help">Mesma métrica LTM em três cortes de referência. Delta vs o LTM que terminava 12 meses antes.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Snapshot</th>
+            <th>Janela LTM</th>
+            <th class="num">Unique</th>
+            <th class="num">≥2</th>
+            <th class="num">Δ ≥2</th>
+            <th class="num">≥4</th>
+            <th class="num">Δ ≥4</th>
+            <th class="num">1×</th>
+            <th class="num">2×</th>
+            <th class="num">3×</th>
+            <th class="num">4×</th>
+            <th class="num">5+</th>
+          </tr>
+        </thead>
+        <tbody id="snapBody"></tbody>
+      </table>
+    </div>
+  </section>
+
   <div class="kpis" id="kpis"></div>
+
+  <section>
+    <h2>Recorrentes ≥2 e ≥4 (rolling LTM)</h2>
+    <div class="charts">
+      <div class="box"><h3>Passageiros ≥2 / ≥4 no LTM</h3><canvas id="chartGe" height="240"></canvas></div>
+      <div class="box"><h3>Taxa ≥2 % (repeat rate)</h3><canvas id="chartRepeat" height="240"></canvas></div>
+    </div>
+  </section>
 
   <section>
     <h2>Cumulativo unique customers</h2>
@@ -507,10 +729,9 @@ HTML = r'''<!DOCTYPE html>
   </section>
 
   <section>
-    <h2>Novos clientes e repeat rate (rolling)</h2>
-    <div class="charts">
-      <div class="box"><h3>Novos clientes / mês</h3><canvas id="chartNew" height="240"></canvas></div>
-      <div class="box"><h3>Repeat rate rolling (até 12m)</h3><canvas id="chartRepeat" height="240"></canvas></div>
+    <h2>Novos clientes / mês</h2>
+    <div class="charts full">
+      <div class="box"><canvas id="chartNew" height="240"></canvas></div>
     </div>
   </section>
 
@@ -530,9 +751,14 @@ HTML = r'''<!DOCTYPE html>
             <th class="num">Cumulativo</th>
             <th class="num">Unique</th>
             <th class="num">Boardings</th>
+            <th class="num">LTM unique</th>
+            <th class="num">LTM ≥2</th>
+            <th class="num">Δ ≥2</th>
+            <th class="num">LTM ≥4</th>
+            <th class="num">Δ ≥4</th>
+            <th class="num">≥2 %</th>
             <th class="num">MoM cumul.%</th>
             <th class="num">YoY cumul.%</th>
-            <th class="num">Repeat %</th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
@@ -544,16 +770,74 @@ HTML = r'''<!DOCTYPE html>
 const D = window.KPI_DATA || {};
 const s = D.summary || {};
 const monthly = D.monthly || [];
+const snapshots = D.snapshots || [];
 const fmt = (v, suffix='%') => v == null ? '—' : `${v > 0 ? '+' : ''}${v}${suffix}`;
+const fmtN = (v) => v == null ? '—' : String(v);
+const fmtDelta = (v) => v == null ? '—' : `${v > 0 ? '+' : ''}${v}`;
 const cls = (v) => v == null ? 'na' : (v >= 0 ? 'pos' : 'neg');
+const pctOf = (n, den) => (!den || n == null) ? '—' : `${(n / den * 100).toFixed(1)}%`;
 
 const gaps = monthly.filter(r => r.data_gap);
 document.getElementById('quality').innerHTML = gaps.length
   ? ('Lacunas de ingestão: ' + gaps.map(r => `<strong>${r.month}</strong> — ${r.data_gap}`).join(' · ') + '. Suba os Excel faltantes na API de Manifests para preencher.')
   : 'Nenhuma lacuna conhecida no período.';
 
+if (s.latest_data_gap) {
+  const el = document.getElementById('gapAlert');
+  el.hidden = false;
+  el.textContent = `Atenção no LTM atual (${s.latest_month}): ${s.latest_data_gap}`;
+}
+
 document.getElementById('meta').textContent =
   `Fonte: ${D.source || '—'} · base ${D.base_start || D.data_start || '—'} → ${D.data_end || '—'} · ${D.months_available || 0} meses · gerado ${D.generated_at || '—'}`;
+
+const winLabel = (s.ltm_window_start && s.ltm_window_end)
+  ? `${s.ltm_window_start} → ${s.ltm_window_end}`
+  : '—';
+document.getElementById('ltmHelp').textContent =
+  `Janela LTM atual (${s.latest_month || '—'}): ${winLabel}. Comparado ao LTM que terminava em ${s.ltm_vs_month || '—'}.`;
+
+document.getElementById('recKpis').innerHTML = [
+  ['Unique LTM', s.ltm_unique_customers, `Δ ${fmtDelta(s.ltm_unique_delta_vs_12m)} vs ${s.ltm_vs_month || '—'}`],
+  ['Recorrentes ≥2', s.ltm_ge2, `há 12m: ${fmtN(s.prev_ltm_ge2)} · hoje ${fmtDelta(s.ltm_ge2_delta_vs_12m)} · ${s.ltm_ge2_pct ?? '—'}%`],
+  ['Recorrentes ≥4', s.ltm_ge4, `há 12m: ${fmtN(s.prev_ltm_ge4)} · hoje ${fmtDelta(s.ltm_ge4_delta_vs_12m)} · ${s.ltm_ge4_pct ?? '—'}%`],
+].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${fmtN(v)}</strong><span class="sub">${sub || ''}</span></article>`).join('');
+
+const freqRows = [
+  ['1× (uma vez)', s.ltm_freq_1],
+  ['2×', s.ltm_freq_2],
+  ['3×', s.ltm_freq_3],
+  ['4×', s.ltm_freq_4],
+  ['5+', s.ltm_freq_5plus],
+];
+document.getElementById('freqBody').innerHTML = freqRows.map(([lab, n]) => `
+  <tr>
+    <td>${lab}</td>
+    <td class="num">${fmtN(n)}</td>
+    <td class="num">${pctOf(n, s.ltm_unique_customers)}</td>
+  </tr>`).join('');
+
+document.getElementById('snapBody').innerHTML = snapshots.map(r => {
+  if (!r.available) {
+    return `<tr><td>${r.label}</td><td colspan="11" class="na">${r.data_gap || 'sem dados'}</td></tr>`;
+  }
+  const win = (r.window_start && r.window_end) ? `${r.window_start} → ${r.window_end}` : '—';
+  const gap = r.data_gap ? ` <span class="na">⚠</span>` : '';
+  return `<tr>
+    <td>${r.label}${gap}</td>
+    <td>${win}</td>
+    <td class="num">${fmtN(r.ltm_unique_customers)}</td>
+    <td class="num">${fmtN(r.ltm_ge2)}</td>
+    <td class="num ${cls(r.ltm_ge2_delta_vs_12m)}">${fmtDelta(r.ltm_ge2_delta_vs_12m)}</td>
+    <td class="num">${fmtN(r.ltm_ge4)}</td>
+    <td class="num ${cls(r.ltm_ge4_delta_vs_12m)}">${fmtDelta(r.ltm_ge4_delta_vs_12m)}</td>
+    <td class="num">${fmtN(r.ltm_freq_1)}</td>
+    <td class="num">${fmtN(r.ltm_freq_2)}</td>
+    <td class="num">${fmtN(r.ltm_freq_3)}</td>
+    <td class="num">${fmtN(r.ltm_freq_4)}</td>
+    <td class="num">${fmtN(r.ltm_freq_5plus)}</td>
+  </tr>`;
+}).join('');
 
 document.getElementById('kpis').innerHTML = [
   ['Unique (base jan/24)', s.unique_customers_all_time, `${s.total_boardings || 0} boardings`],
@@ -561,7 +845,7 @@ document.getElementById('kpis').innerHTML = [
   ['Cumulativo final', s.cumulative_unique_end, `até ${s.latest_month || '—'}`],
   ['MoM cumulativo', fmt(s.latest_mom_cumulative_pct), `último mês ${s.latest_month || '—'}`],
   ['YoY cumulativo', fmt(s.latest_yoy_cumulative_pct), s.yoy_months_available ? `${s.yoy_months_available} meses com YoY` : 'sem par YoY ainda'],
-  ['LTM unique / repeat', s.ltm_unique_customers, `repeat ${s.ltm_repeat_rate_pct ?? '—'}%`],
+  ['LTM ≥2 / ≥4', `${fmtN(s.ltm_ge2)} / ${fmtN(s.ltm_ge4)}`, `unique ${fmtN(s.ltm_unique_customers)}`],
 ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v ?? '—'}</strong><span class="sub">${sub || ''}</span></article>`).join('');
 
 document.getElementById('tbody').innerHTML = monthly.map(r => `
@@ -571,9 +855,14 @@ document.getElementById('tbody').innerHTML = monthly.map(r => `
     <td class="num">${r.cumulative_unique_customers}</td>
     <td class="num">${r.unique_passengers}</td>
     <td class="num">${r.boardings}</td>
+    <td class="num">${r.ltm_unique_customers}</td>
+    <td class="num">${r.ltm_ge2}</td>
+    <td class="num ${cls(r.ltm_ge2_delta_vs_12m)}">${fmtDelta(r.ltm_ge2_delta_vs_12m)}</td>
+    <td class="num">${r.ltm_ge4}</td>
+    <td class="num ${cls(r.ltm_ge4_delta_vs_12m)}">${fmtDelta(r.ltm_ge4_delta_vs_12m)}</td>
+    <td class="num">${r.ltm_ge2_pct}%</td>
     <td class="num ${cls(r.mom_cumulative_pct)}">${fmt(r.mom_cumulative_pct)}</td>
     <td class="num ${cls(r.yoy_cumulative_pct)}">${fmt(r.yoy_cumulative_pct)}</td>
-    <td class="num">${r.repeat_rate_pct}%</td>
   </tr>`).join('');
 
 const labels = monthly.map(r => r.month);
@@ -585,7 +874,7 @@ const line = (id, datasets, opts={}) => new Chart(document.getElementById(id), {
   type: 'line',
   data: { labels: opts.labels || labels, datasets },
   options: {
-    plugins: { legend: { display: !!opts.legend, position: 'bottom' } },
+    plugins: { legend: { display: opts.legend !== false, position: 'bottom' } },
     scales: {
       x: { grid },
       y: {
@@ -597,35 +886,48 @@ const line = (id, datasets, opts={}) => new Chart(document.getElementById(id), {
   },
 });
 
+line('chartGe', [
+  {
+    label: '≥2',
+    data: active.map(r => r.ltm_ge2),
+    borderColor: '#0b6b52', backgroundColor: 'rgba(11,107,82,0.10)', fill: false, tension: 0.25, pointRadius: 3,
+  },
+  {
+    label: '≥4',
+    data: active.map(r => r.ltm_ge4),
+    borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.10)', fill: false, tension: 0.25, pointRadius: 3,
+  },
+], { labels: active.map(r => r.month), beginAtZero: true, legend: true });
+
+line('chartRepeat', [{
+  label: '≥2 %',
+  data: active.map(r => r.ltm_ge2_pct ?? r.repeat_rate_pct),
+  borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.10)', fill: true, tension: 0.25, pointRadius: 3,
+}], { labels: active.map(r => r.month), pct: true, beginAtZero: true, legend: false });
+
 line('chartCum', [{
   label: 'Cumulativo unique',
   data: monthly.map(r => r.cumulative_unique_customers),
   borderColor: '#0b6b52', backgroundColor: 'rgba(11,107,82,0.12)', fill: true, tension: 0.25, pointRadius: 3,
-}], { beginAtZero: true });
+}], { beginAtZero: true, legend: false });
 
 line('chartMomCum', [{
   label: 'MoM cumulativo %',
   data: momCum.map(r => r.mom_cumulative_pct),
   borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.12)', fill: true, tension: 0.2, pointRadius: 3, spanGaps: true,
-}], { labels: momCum.map(r => r.month), pct: true });
+}], { labels: momCum.map(r => r.month), pct: true, legend: false });
 
 line('chartYoyCum', [{
   label: 'YoY cumulativo %',
   data: yoyCum.map(r => r.yoy_cumulative_pct),
   borderColor: '#2f5d9f', backgroundColor: 'rgba(47,93,159,0.12)', fill: true, tension: 0.2, pointRadius: 3, spanGaps: true,
-}], { labels: yoyCum.map(r => r.month), pct: true });
+}], { labels: yoyCum.map(r => r.month), pct: true, legend: false });
 
 line('chartNew', [{
   label: 'Novos',
   data: active.map(r => r.new_customers),
   borderColor: '#0b6b52', tension: 0.25, pointRadius: 3,
-}], { labels: active.map(r => r.month), beginAtZero: true });
-
-line('chartRepeat', [{
-  label: 'Repeat %',
-  data: active.map(r => r.repeat_rate_pct),
-  borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.10)', fill: true, tension: 0.25, pointRadius: 3,
-}], { labels: active.map(r => r.month), pct: true, beginAtZero: true });
+}], { labels: active.map(r => r.month), beginAtZero: true, legend: false });
 </script>
 </body>
 </html>
@@ -635,19 +937,100 @@ line('chartRepeat', [{
 def write_excel(data: dict, path: Path) -> None:
     from openpyxl import Workbook
     from openpyxl.chart import LineChart, Reference
-    from openpyxl.chart.series import SeriesLabel
     from openpyxl.styles import Font
 
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Resumo"
+    s = data["summary"]
+
+    ws_rec = wb.active
+    ws_rec.title = "Recorrência LTM"
+    ws_rec["A1"] = "REVO · Recorrência LTM"
+    ws_rec["A1"].font = Font(size=16, bold=True)
+    ws_rec["A2"] = (
+        f"Fonte {data['source']} · base {data.get('base_start') or data['data_start']} "
+        f"→ {data['data_end']} · LTM {s.get('ltm_window_start')} → {s.get('ltm_window_end')}"
+    )
+    if s.get("latest_data_gap"):
+        ws_rec["A3"] = f"Alerta: {s['latest_month']} — {s['latest_data_gap']}"
+
+    headline = [
+        ("Unique LTM", s.get("ltm_unique_customers")),
+        ("Δ unique vs −12m", s.get("ltm_unique_delta_vs_12m")),
+        ("≥2 LTM", s.get("ltm_ge2")),
+        ("≥2 há 12m", s.get("prev_ltm_ge2")),
+        ("Δ ≥2", s.get("ltm_ge2_delta_vs_12m")),
+        ("≥2 %", s.get("ltm_ge2_pct")),
+        ("≥4 LTM", s.get("ltm_ge4")),
+        ("≥4 há 12m", s.get("prev_ltm_ge4")),
+        ("Δ ≥4", s.get("ltm_ge4_delta_vs_12m")),
+        ("≥4 %", s.get("ltm_ge4_pct")),
+    ]
+    for i, (lab, val) in enumerate(headline):
+        ws_rec.cell(5, 1 + i, lab)
+        ws_rec.cell(6, 1 + i, val if val is not None else "—")
+
+    ws_rec["A8"] = "Distribuição por frequência (LTM atual)"
+    ws_rec["A8"].font = Font(bold=True)
+    for i, h in enumerate(["Frequência", "Passageiros", "% do LTM"], 1):
+        ws_rec.cell(9, i, h)
+    unique_ltm = s.get("ltm_unique_customers") or 0
+    for r_i, (lab, key) in enumerate(
+        [
+            ("1×", "ltm_freq_1"),
+            ("2×", "ltm_freq_2"),
+            ("3×", "ltm_freq_3"),
+            ("4×", "ltm_freq_4"),
+            ("5+", "ltm_freq_5plus"),
+        ],
+        10,
+    ):
+        n = s.get(key)
+        ws_rec.cell(r_i, 1, lab)
+        ws_rec.cell(r_i, 2, n if n is not None else "—")
+        if n is not None and unique_ltm:
+            ws_rec.cell(r_i, 3, round(n / unique_ltm * 100, 1))
+        else:
+            ws_rec.cell(r_i, 3, "—")
+
+    ws_rec["A16"] = "Snapshots (Jun/2026 · Dez/2025 · Dez/2024)"
+    ws_rec["A16"].font = Font(bold=True)
+    snap_headers = [
+        "Snapshot", "Mês", "Janela início", "Janela fim", "Unique",
+        "≥2", "≥2 há 12m", "Δ ≥2", "≥4", "≥4 há 12m", "Δ ≥4",
+        "1×", "2×", "3×", "4×", "5+", "Alerta",
+    ]
+    for i, h in enumerate(snap_headers, 1):
+        ws_rec.cell(17, i, h)
+    for r_i, snap in enumerate(data.get("snapshots") or [], 18):
+        vals = [
+            snap.get("label"),
+            snap.get("month"),
+            snap.get("window_start"),
+            snap.get("window_end"),
+            snap.get("ltm_unique_customers"),
+            snap.get("ltm_ge2"),
+            snap.get("prev_ltm_ge2"),
+            snap.get("ltm_ge2_delta_vs_12m"),
+            snap.get("ltm_ge4"),
+            snap.get("prev_ltm_ge4"),
+            snap.get("ltm_ge4_delta_vs_12m"),
+            snap.get("ltm_freq_1"),
+            snap.get("ltm_freq_2"),
+            snap.get("ltm_freq_3"),
+            snap.get("ltm_freq_4"),
+            snap.get("ltm_freq_5plus"),
+            snap.get("data_gap") or "",
+        ]
+        for c, v in enumerate(vals, 1):
+            ws_rec.cell(r_i, c, v if v is not None else "—")
+
+    ws = wb.create_sheet("Resumo")
     ws["A1"] = "REVO · Customer growth MoM / YoY"
     ws["A1"].font = Font(size=16, bold=True)
     ws["A2"] = (
         f"Fonte {data['source']} · base {data.get('base_start') or data['data_start']} "
         f"→ {data['data_end']} · {data['months_available']} meses"
     )
-    s = data["summary"]
     cards = [
         ("Unique (base jan/24)", s.get("unique_customers_all_time")),
         ("Cumulativo final", s.get("cumulative_unique_end")),
@@ -657,6 +1040,8 @@ def write_excel(data: dict, path: Path) -> None:
         ("Missões (Sigtrip)", s.get("total_missions") or s.get("total_flights")),
         ("Pernas (legs)", s.get("total_flight_legs")),
         ("Missões LTM", s.get("ltm_missions")),
+        ("LTM ≥2", s.get("ltm_ge2")),
+        ("LTM ≥4", s.get("ltm_ge4")),
     ]
     for i, (lab, val) in enumerate(cards):
         ws.cell(4, 1 + i, lab)
@@ -666,7 +1051,9 @@ def write_excel(data: dict, path: Path) -> None:
     headers = [
         "Mês", "Novos", "Cumulativo", "Unique", "Boardings", "Missões",
         "MoM cumulativo %", "YoY cumulativo %",
-        "LTM unique", "Repeat %",
+        "LTM unique", "LTM ≥2", "Δ ≥2 vs −12m", "LTM ≥4", "Δ ≥4 vs −12m",
+        "≥2 %", "≥4 %",
+        "LTM 1×", "LTM 2×", "LTM 3×", "LTM 4×", "LTM 5+",
     ]
     for i, h in enumerate(headers, 1):
         ws_m.cell(1, i, h)
@@ -675,13 +1062,17 @@ def write_excel(data: dict, path: Path) -> None:
             r["month"], r["new_customers"], r["cumulative_unique_customers"],
             r["unique_passengers"], r["boardings"], r["flights"],
             r["mom_cumulative_pct"], r["yoy_cumulative_pct"],
-            r["ltm_unique_customers"], r["repeat_rate_pct"],
+            r["ltm_unique_customers"], r["ltm_ge2"], r.get("ltm_ge2_delta_vs_12m"),
+            r["ltm_ge4"], r.get("ltm_ge4_delta_vs_12m"),
+            r["ltm_ge2_pct"], r["ltm_ge4_pct"],
+            r["ltm_freq_1"], r["ltm_freq_2"], r["ltm_freq_3"],
+            r["ltm_freq_4"], r["ltm_freq_5plus"],
         ]
         for c, v in enumerate(vals, 1):
             ws_m.cell(r_i, c, v if v is not None else None)
     last = 1 + len(data["monthly"])
 
-    def add_line(title, min_col, anchor, y_pct=False):
+    def add_line(title, min_col, anchor):
         ch = LineChart()
         ch.title = title
         ch.height = 10
@@ -690,9 +1081,11 @@ def write_excel(data: dict, path: Path) -> None:
         ch.set_categories(Reference(ws_m, min_col=1, min_row=2, max_row=last))
         ws_m.add_chart(ch, anchor)
 
-    add_line("Cumulativo unique", 3, "L2")
-    add_line("MoM cumulativo %", 7, "L20", y_pct=True)
-    add_line("YoY cumulativo %", 8, "L38", y_pct=True)
+    add_line("Cumulativo unique", 3, "V2")
+    add_line("MoM cumulativo %", 7, "V20")
+    add_line("YoY cumulativo %", 8, "V38")
+    add_line("LTM ≥2", 10, "V56")
+    add_line("LTM ≥4", 12, "V74")
 
     ws_r = wb.create_sheet("Top Rotas")
     for i, h in enumerate(["Rota", "Boardings", "Flights"], 1):
@@ -759,6 +1152,38 @@ def main() -> None:
     print("Excel:", OUT / "revo-customer-kpis.xlsx")
     print(json.dumps(data["summary"], indent=2))
     print("months", data["months_available"], data["data_start"], "→", data["data_end"])
+    print(
+        "Recurrence LTM",
+        {
+            "month": data["summary"].get("latest_month"),
+            "unique": data["summary"].get("ltm_unique_customers"),
+            "ge2": data["summary"].get("ltm_ge2"),
+            "ge2_delta": data["summary"].get("ltm_ge2_delta_vs_12m"),
+            "ge4": data["summary"].get("ltm_ge4"),
+            "ge4_delta": data["summary"].get("ltm_ge4_delta_vs_12m"),
+            "freq": {
+                "1": data["summary"].get("ltm_freq_1"),
+                "2": data["summary"].get("ltm_freq_2"),
+                "3": data["summary"].get("ltm_freq_3"),
+                "4": data["summary"].get("ltm_freq_4"),
+                "5+": data["summary"].get("ltm_freq_5plus"),
+            },
+        },
+    )
+    print(
+        "Snapshots",
+        [
+            {
+                "label": sn.get("label"),
+                "ge2": sn.get("ltm_ge2"),
+                "d2": sn.get("ltm_ge2_delta_vs_12m"),
+                "ge4": sn.get("ltm_ge4"),
+                "d4": sn.get("ltm_ge4_delta_vs_12m"),
+                "gap": sn.get("data_gap"),
+            }
+            for sn in data.get("snapshots") or []
+        ],
+    )
     print(
         "MoM cumul",
         [(r["month"], r["mom_cumulative_pct"]) for r in data["monthly"] if r["mom_cumulative_pct"] is not None][-6:],

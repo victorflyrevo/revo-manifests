@@ -1,8 +1,8 @@
 REVO Customer KPIs — local
 
 Fonte: https://web-production-9b4c2.up.railway.app
-Base: janeiro/2025 → hoje
+Foco: recorrência LTM (≥2 / ≥4) + snapshots Jun/2026 · Dez/2025 · Dez/2024
 
 Abrir: http://127.0.0.1:8765
-Excel: revo-customer-kpis.xlsx
+Excel: revo-customer-kpis.xlsx (aba Recorrência LTM)
 Regenerar: python3 build_full_dashboard.py

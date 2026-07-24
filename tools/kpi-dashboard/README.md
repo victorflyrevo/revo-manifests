@@ -2,14 +2,16 @@
 
 Builds `index.html` + `revo-customer-kpis.xlsx` from the Manifests API.
 
-Flight counts use the **Sigtrip mission cut** (`app.missions`): connected same-day legs on the same aircraft.
+**Hero metric: recorrência LTM** (últimos 12 meses) — distribuição 1× / 2× / 3× / 4× / 5+, cortes ≥2 e ≥4, delta vs o LTM de 12 meses atrás, e snapshots Jun/2026 · Dez/2025 · Dez/2024.
+
+Flight counts use the **Sigtrip mission cut** (`app.missions`): connected same-day legs on the same aircraft. Recurrence counts **boardings per passenger** inside the LTM window (SIAV→SIAV and cancelled sheets excluded).
 
 ## Setup
 
 ```bash
-cp .env.example .env.local   # if present, or create:
-# MANIFESTS_API_BASE=https://…
-# API_KEY=…
+# tools/kpi-dashboard/.env.local
+MANIFESTS_API_BASE=https://web-production-9b4c2.up.railway.app
+API_KEY=…
 ```
 
 ## Build
@@ -21,3 +23,14 @@ python3 tools/kpi-dashboard/build_full_dashboard.py
 ```
 
 Outputs are written next to the script (gitignored): `index.html`, `data.js`, `revo-customer-kpis.xlsx`.
+
+## Recorrência LTM
+
+| Campo | Significado |
+|---|---|
+| Unique LTM | Passageiros com ≥1 boarding na janela de até 12 meses |
+| ≥2 / ≥4 | Passageiros com 2+ / 4+ boardings na mesma janela |
+| Δ vs −12m | Diferença absoluta vs o LTM que terminava no mesmo mês do ano anterior |
+| Snapshots | Cortes fixos: `2026-06`, `2025-12`, `2024-12` |
+
+Excel: aba **Recorrência LTM** (headline + distribuição + snapshots) e colunas extras na aba **Mensal**.
