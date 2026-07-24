@@ -142,34 +142,47 @@ SNAPSHOT_SPECS = (
     ("2024-12", "Dez/2024"),
 )
 
+# Exact boarding counts 1..20, plus a single >20 bucket
+FREQ_CAP = 20
+FREQ_KEYS = [f"ltm_freq_{i}" for i in range(1, FREQ_CAP + 1)] + ["ltm_freq_gt20"]
+FREQ_LABELS = [f"{i}×" for i in range(1, FREQ_CAP + 1)] + [f">{FREQ_CAP}"]
+
 
 def month_minus_years(label: str, years: int = 1) -> str:
     y, m = label.split("-")
     return f"{int(y) - years}-{m}"
 
 
+def empty_freq_fields(value: Any = None) -> dict[str, Any]:
+    return {k: value for k in FREQ_KEYS}
+
+
+def freq_rows_from_fields(fields: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for key, label in zip(FREQ_KEYS, FREQ_LABELS):
+        rows.append({"key": key, "label": label, "count": fields.get(key)})
+    return rows
+
+
 def ltm_freq_metrics(ltm_counts: dict[int, int]) -> dict[str, Any]:
     """Passenger frequency distribution inside an LTM boarding window."""
-    freq_1 = freq_2 = freq_3 = freq_4 = freq_5plus = 0
+    buckets = {i: 0 for i in range(1, FREQ_CAP + 1)}
+    gt20 = 0
     ge2 = ge4 = 0
     for n in ltm_counts.values():
         if n >= 2:
             ge2 += 1
         if n >= 4:
             ge4 += 1
-        if n <= 1:
-            freq_1 += 1
-        elif n == 2:
-            freq_2 += 1
-        elif n == 3:
-            freq_3 += 1
-        elif n == 4:
-            freq_4 += 1
-        else:
-            freq_5plus += 1
+        if 1 <= n <= FREQ_CAP:
+            buckets[n] += 1
+        elif n > FREQ_CAP:
+            gt20 += 1
     unique = len(ltm_counts)
     ge2_pct = round(ge2 / unique * 100, 1) if unique else 0.0
     ge4_pct = round(ge4 / unique * 100, 1) if unique else 0.0
+    freq_fields = {f"ltm_freq_{i}": buckets[i] for i in range(1, FREQ_CAP + 1)}
+    freq_fields["ltm_freq_gt20"] = gt20
     return {
         "ltm_unique_customers": unique,
         "ltm_repeat_customers": ge2,
@@ -178,11 +191,8 @@ def ltm_freq_metrics(ltm_counts: dict[int, int]) -> dict[str, Any]:
         "ltm_ge2_pct": ge2_pct,
         "ltm_ge4_pct": ge4_pct,
         "repeat_rate_pct": ge2_pct,
-        "ltm_freq_1": freq_1,
-        "ltm_freq_2": freq_2,
-        "ltm_freq_3": freq_3,
-        "ltm_freq_4": freq_4,
-        "ltm_freq_5plus": freq_5plus,
+        **freq_fields,
+        "ltm_freq_rows": freq_rows_from_fields(freq_fields),
     }
 
 
@@ -437,6 +447,7 @@ def compute(
 
     def _snapshot_from_row(label: str, title: str, row: Optional[dict]) -> dict:
         if not row:
+            empty = empty_freq_fields(None)
             return {
                 "month": label,
                 "label": title,
@@ -449,11 +460,8 @@ def compute(
                 "ltm_ge4": None,
                 "ltm_ge2_pct": None,
                 "ltm_ge4_pct": None,
-                "ltm_freq_1": None,
-                "ltm_freq_2": None,
-                "ltm_freq_3": None,
-                "ltm_freq_4": None,
-                "ltm_freq_5plus": None,
+                **empty,
+                "ltm_freq_rows": freq_rows_from_fields(empty),
                 "ltm_vs_month": None,
                 "ltm_unique_delta_vs_12m": None,
                 "ltm_ge2_delta_vs_12m": None,
@@ -463,6 +471,7 @@ def compute(
             }
         prev_label = row.get("ltm_vs_month")
         prev = by_month.get(prev_label) if prev_label else None
+        freq = {k: row[k] for k in FREQ_KEYS}
         return {
             "month": label,
             "label": title,
@@ -476,11 +485,8 @@ def compute(
             "ltm_ge4": row["ltm_ge4"],
             "ltm_ge2_pct": row["ltm_ge2_pct"],
             "ltm_ge4_pct": row["ltm_ge4_pct"],
-            "ltm_freq_1": row["ltm_freq_1"],
-            "ltm_freq_2": row["ltm_freq_2"],
-            "ltm_freq_3": row["ltm_freq_3"],
-            "ltm_freq_4": row["ltm_freq_4"],
-            "ltm_freq_5plus": row["ltm_freq_5plus"],
+            **freq,
+            "ltm_freq_rows": freq_rows_from_fields(freq),
             "ltm_vs_month": prev_label,
             "ltm_unique_delta_vs_12m": row.get("ltm_unique_delta_vs_12m"),
             "ltm_ge2_delta_vs_12m": row.get("ltm_ge2_delta_vs_12m"),
@@ -550,11 +556,9 @@ def compute(
             "ltm_ge2_pct": preferred_latest["ltm_ge2_pct"],
             "ltm_ge4_pct": preferred_latest["ltm_ge4_pct"],
             "ltm_repeat_rate_pct": preferred_latest["repeat_rate_pct"],
-            "ltm_freq_1": preferred_latest["ltm_freq_1"],
-            "ltm_freq_2": preferred_latest["ltm_freq_2"],
-            "ltm_freq_3": preferred_latest["ltm_freq_3"],
-            "ltm_freq_4": preferred_latest["ltm_freq_4"],
-            "ltm_freq_5plus": preferred_latest["ltm_freq_5plus"],
+            **{k: preferred_latest[k] for k in FREQ_KEYS},
+            "ltm_freq_rows": preferred_latest.get("ltm_freq_rows")
+            or freq_rows_from_fields(preferred_latest),
             "ltm_window_start": preferred_latest["window_start"],
             "ltm_window_end": preferred_latest["window_end"],
             "ltm_vs_month": preferred_latest.get("ltm_vs_month"),
@@ -649,7 +653,7 @@ HTML = r'''<!DOCTYPE html>
 <main>
   <header>
     <h1>REVO</h1>
-    <p class="lede">Recorrência LTM (últimos 12 meses): quantos passageiros voaram 1×, 2×, 3×, 4× e 5+. Cortes-chave ≥2 e ≥4, com delta vs o LTM de 12 meses atrás. SIAV→SIAV excluídos.</p>
+    <p class="lede">Recorrência LTM (últimos 12 meses): quantos passageiros voaram 1× … 20× e &gt;20. Cortes-chave ≥2 e ≥4, com delta vs o LTM de 12 meses atrás. SIAV→SIAV excluídos.</p>
     <p class="meta" id="meta"></p>
     <p class="meta"><a href="./revo-customer-kpis.xlsx">Baixar Excel</a></p>
     <p class="alert" id="gapAlert" hidden></p>
@@ -663,7 +667,7 @@ HTML = r'''<!DOCTYPE html>
 
   <section>
     <h2>Distribuição por frequência (LTM atual)</h2>
-    <p class="help">Passageiros únicos no LTM agrupados pelo nº de boardings na janela.</p>
+    <p class="help">Passageiros únicos no LTM agrupados pelo nº de boardings na janela (1× a 20× e &gt;20).</p>
     <div class="table-wrap">
       <table>
         <thead>
@@ -692,14 +696,20 @@ HTML = r'''<!DOCTYPE html>
             <th class="num">Δ ≥2</th>
             <th class="num">≥4</th>
             <th class="num">Δ ≥4</th>
-            <th class="num">1×</th>
-            <th class="num">2×</th>
-            <th class="num">3×</th>
-            <th class="num">4×</th>
-            <th class="num">5+</th>
           </tr>
         </thead>
         <tbody id="snapBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Frequência por snapshot (1× … 20× e &gt;20)</h2>
+    <p class="help">Comparação da distribuição completa nos três cortes.</p>
+    <div class="table-wrap">
+      <table>
+        <thead id="freqSnapHead"></thead>
+        <tbody id="freqSnapBody"></tbody>
       </table>
     </div>
   </section>
@@ -811,23 +821,17 @@ document.getElementById('recKpis').innerHTML = [
   ['Recorrentes ≥4', s.ltm_ge4, `há 12m: ${fmtN(s.prev_ltm_ge4)} · hoje ${fmtDelta(s.ltm_ge4_delta_vs_12m)} · ${s.ltm_ge4_pct ?? '—'}%`],
 ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${fmtN(v)}</strong><span class="sub">${sub || ''}</span></article>`).join('');
 
-const freqRows = [
-  ['1× (uma vez)', s.ltm_freq_1],
-  ['2×', s.ltm_freq_2],
-  ['3×', s.ltm_freq_3],
-  ['4×', s.ltm_freq_4],
-  ['5+', s.ltm_freq_5plus],
-];
-document.getElementById('freqBody').innerHTML = freqRows.map(([lab, n]) => `
+const freqRows = s.ltm_freq_rows || [];
+document.getElementById('freqBody').innerHTML = freqRows.map(r => `
   <tr>
-    <td>${lab}</td>
-    <td class="num">${fmtN(n)}</td>
-    <td class="num">${pctOf(n, s.ltm_unique_customers)}</td>
+    <td>${r.label}</td>
+    <td class="num">${fmtN(r.count)}</td>
+    <td class="num">${pctOf(r.count, s.ltm_unique_customers)}</td>
   </tr>`).join('');
 
 document.getElementById('snapBody').innerHTML = snapshots.map(r => {
   if (!r.available) {
-    return `<tr><td>${r.label}</td><td colspan="11" class="na">${r.data_gap || 'sem dados'}</td></tr>`;
+    return `<tr><td>${r.label}</td><td colspan="6" class="na">${r.data_gap || 'sem dados'}</td></tr>`;
   }
   const win = (r.window_start && r.window_end) ? `${r.window_start} → ${r.window_end}` : '—';
   const gap = r.data_gap ? ` <span class="na">⚠</span>` : '';
@@ -839,13 +843,22 @@ document.getElementById('snapBody').innerHTML = snapshots.map(r => {
     <td class="num ${cls(r.ltm_ge2_delta_vs_12m)}">${fmtDelta(r.ltm_ge2_delta_vs_12m)}</td>
     <td class="num">${fmtN(r.ltm_ge4)}</td>
     <td class="num ${cls(r.ltm_ge4_delta_vs_12m)}">${fmtDelta(r.ltm_ge4_delta_vs_12m)}</td>
-    <td class="num">${fmtN(r.ltm_freq_1)}</td>
-    <td class="num">${fmtN(r.ltm_freq_2)}</td>
-    <td class="num">${fmtN(r.ltm_freq_3)}</td>
-    <td class="num">${fmtN(r.ltm_freq_4)}</td>
-    <td class="num">${fmtN(r.ltm_freq_5plus)}</td>
   </tr>`;
 }).join('');
+
+document.getElementById('freqSnapHead').innerHTML = `<tr>
+  <th>Frequência</th>
+  ${snapshots.map(r => `<th class="num">${r.label}</th>`).join('')}
+</tr>`;
+const freqTemplate = (snapshots.find(r => (r.ltm_freq_rows || []).length) || {}).ltm_freq_rows || freqRows;
+document.getElementById('freqSnapBody').innerHTML = freqTemplate.map((row, idx) => `
+  <tr>
+    <td>${row.label}</td>
+    ${snapshots.map(sn => {
+      const n = (sn.ltm_freq_rows && sn.ltm_freq_rows[idx]) ? sn.ltm_freq_rows[idx].count : sn[row.key];
+      return `<td class="num">${fmtN(n)}</td>`;
+    }).join('')}
+  </tr>`).join('');
 
 document.getElementById('kpis').innerHTML = [
   ['Unique (base jan/24)', s.unique_customers_all_time, `${s.total_boardings || 0} boardings`],
@@ -977,39 +990,32 @@ def write_excel(data: dict, path: Path) -> None:
         ws_rec.cell(5, 1 + i, lab)
         ws_rec.cell(6, 1 + i, val if val is not None else "—")
 
-    ws_rec["A8"] = "Distribuição por frequência (LTM atual)"
+    ws_rec["A8"] = "Distribuição por frequência (LTM atual · 1× … 20× e >20)"
     ws_rec["A8"].font = Font(bold=True)
     for i, h in enumerate(["Frequência", "Passageiros", "% do LTM"], 1):
         ws_rec.cell(9, i, h)
     unique_ltm = s.get("ltm_unique_customers") or 0
-    for r_i, (lab, key) in enumerate(
-        [
-            ("1×", "ltm_freq_1"),
-            ("2×", "ltm_freq_2"),
-            ("3×", "ltm_freq_3"),
-            ("4×", "ltm_freq_4"),
-            ("5+", "ltm_freq_5plus"),
-        ],
-        10,
-    ):
-        n = s.get(key)
-        ws_rec.cell(r_i, 1, lab)
+    freq_rows = s.get("ltm_freq_rows") or freq_rows_from_fields(s)
+    for r_i, row in enumerate(freq_rows, 10):
+        n = row.get("count")
+        ws_rec.cell(r_i, 1, row.get("label"))
         ws_rec.cell(r_i, 2, n if n is not None else "—")
         if n is not None and unique_ltm:
             ws_rec.cell(r_i, 3, round(n / unique_ltm * 100, 1))
         else:
             ws_rec.cell(r_i, 3, "—")
 
-    ws_rec["A16"] = "Snapshots (Jun/2026 · Dez/2025 · Dez/2024)"
-    ws_rec["A16"].font = Font(bold=True)
+    snap_start = 10 + len(freq_rows) + 2
+    ws_rec.cell(snap_start, 1, "Snapshots (Jun/2026 · Dez/2025 · Dez/2024)")
+    ws_rec.cell(snap_start, 1).font = Font(bold=True)
     snap_headers = [
         "Snapshot", "Mês", "Janela início", "Janela fim", "Unique",
-        "≥2", "≥2 há 12m", "Δ ≥2", "≥4", "≥4 há 12m", "Δ ≥4",
-        "1×", "2×", "3×", "4×", "5+", "Alerta",
-    ]
+        "≥2", "≥2 há 12m", "Δ ≥2", "≥4", "≥4 há 12m", "Δ ≥4", "Alerta",
+    ] + FREQ_LABELS
+    header_row = snap_start + 1
     for i, h in enumerate(snap_headers, 1):
-        ws_rec.cell(17, i, h)
-    for r_i, snap in enumerate(data.get("snapshots") or [], 18):
+        ws_rec.cell(header_row, i, h)
+    for r_i, snap in enumerate(data.get("snapshots") or [], header_row + 1):
         vals = [
             snap.get("label"),
             snap.get("month"),
@@ -1022,15 +1028,24 @@ def write_excel(data: dict, path: Path) -> None:
             snap.get("ltm_ge4"),
             snap.get("prev_ltm_ge4"),
             snap.get("ltm_ge4_delta_vs_12m"),
-            snap.get("ltm_freq_1"),
-            snap.get("ltm_freq_2"),
-            snap.get("ltm_freq_3"),
-            snap.get("ltm_freq_4"),
-            snap.get("ltm_freq_5plus"),
             snap.get("data_gap") or "",
-        ]
+        ] + [snap.get(k) for k in FREQ_KEYS]
         for c, v in enumerate(vals, 1):
             ws_rec.cell(r_i, c, v if v is not None else "—")
+
+    # Cross-tab: frequency rows × snapshot columns
+    xtab_start = header_row + len(data.get("snapshots") or []) + 3
+    ws_rec.cell(xtab_start, 1, "Frequência por snapshot")
+    ws_rec.cell(xtab_start, 1).font = Font(bold=True)
+    snaps = data.get("snapshots") or []
+    ws_rec.cell(xtab_start + 1, 1, "Frequência")
+    for c, snap in enumerate(snaps, 2):
+        ws_rec.cell(xtab_start + 1, c, snap.get("label"))
+    for r_i, row in enumerate(freq_rows, xtab_start + 2):
+        ws_rec.cell(r_i, 1, row.get("label"))
+        for c, snap in enumerate(snaps, 2):
+            n = snap.get(row.get("key"))
+            ws_rec.cell(r_i, c, n if n is not None else "—")
 
     ws = wb.create_sheet("Resumo")
     ws["A1"] = "REVO · Customer growth MoM / YoY"
@@ -1061,8 +1076,7 @@ def write_excel(data: dict, path: Path) -> None:
         "MoM cumulativo %", "YoY cumulativo %",
         "LTM unique", "LTM ≥2", "Δ ≥2 vs −12m", "LTM ≥4", "Δ ≥4 vs −12m",
         "≥2 %", "≥4 %",
-        "LTM 1×", "LTM 2×", "LTM 3×", "LTM 4×", "LTM 5+",
-    ]
+    ] + [f"LTM {lab}" for lab in FREQ_LABELS]
     for i, h in enumerate(headers, 1):
         ws_m.cell(1, i, h)
     for r_i, r in enumerate(data["monthly"], 2):
@@ -1073,9 +1087,7 @@ def write_excel(data: dict, path: Path) -> None:
             r["ltm_unique_customers"], r["ltm_ge2"], r.get("ltm_ge2_delta_vs_12m"),
             r["ltm_ge4"], r.get("ltm_ge4_delta_vs_12m"),
             r["ltm_ge2_pct"], r["ltm_ge4_pct"],
-            r["ltm_freq_1"], r["ltm_freq_2"], r["ltm_freq_3"],
-            r["ltm_freq_4"], r["ltm_freq_5plus"],
-        ]
+        ] + [r.get(k) for k in FREQ_KEYS]
         for c, v in enumerate(vals, 1):
             ws_m.cell(r_i, c, v if v is not None else None)
     last = 1 + len(data["monthly"])
@@ -1170,11 +1182,8 @@ def main() -> None:
             "ge4": data["summary"].get("ltm_ge4"),
             "ge4_delta": data["summary"].get("ltm_ge4_delta_vs_12m"),
             "freq": {
-                "1": data["summary"].get("ltm_freq_1"),
-                "2": data["summary"].get("ltm_freq_2"),
-                "3": data["summary"].get("ltm_freq_3"),
-                "4": data["summary"].get("ltm_freq_4"),
-                "5+": data["summary"].get("ltm_freq_5plus"),
+                row["label"]: row["count"]
+                for row in (data["summary"].get("ltm_freq_rows") or [])
             },
         },
     )

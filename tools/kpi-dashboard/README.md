@@ -2,7 +2,7 @@
 
 Builds `index.html` + `revo-customer-kpis.xlsx` from the Manifests API.
 
-**Hero metric: recorrência LTM** (últimos 12 meses) — distribuição 1× / 2× / 3× / 4× / 5+, cortes ≥2 e ≥4, delta vs o LTM de 12 meses atrás, e snapshots Jun/2026 · Dez/2025 · Dez/2024.
+**Hero metric: recorrência LTM** (últimos 12 meses) — distribuição 1× … 20× e >20, cortes ≥2 e ≥4, delta vs o LTM de 12 meses atrás, e snapshots Jun/2026 · Dez/2025 · Dez/2024.
 
 Flight counts use the **Sigtrip mission cut** (`app.missions`): connected same-day legs on the same aircraft. Recurrence counts **boardings per passenger** inside the LTM window (SIAV→SIAV and cancelled sheets excluded).
 
