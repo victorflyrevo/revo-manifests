@@ -226,16 +226,23 @@ GLOSSARY = (
         "Voos Salesforce com Tipo contendo Shuttle (ShuttleSeat / ShuttleFullCabin).",
     ),
     (
-        "Faturamento reconhecido",
-        "Soma de Opportunity.Amount com StageName = Pago (data de fechamento).",
+        "Valor pago (voo)",
+        "Soma de Servico.ValorPago__c por Empenho no mês do voo (DiaVoo/DataHoraVoo). "
+        "Mesma base do relatório Financeiro · Validação Weekly KPI.",
+    ),
+    (
+        "Receita reconhecida",
+        "Soma de Empenho.ValorReconhecimentoReceita__c no mês do voo. "
+        "Campo populado a partir de ~mar/2026; meses anteriores ficam zerados.",
     ),
     (
         "Corporate mobility %",
-        "% do faturamento reconhecido cuja Conta é Record Type Cliente - Pessoa Jurídica.",
+        "% sobre a receita reconhecida (ou valor pago) cuja Conta Faturamento "
+        "(fallback Comprador) é Cliente - Pessoa Jurídica.",
     ),
     (
         "Subscription (Revo Seats)",
-        "Opportunities com Record Type = Revo Seats (assinatura / pacote de assentos).",
+        "Empenhos cujo Pagamento tem Record Type = Voucher RevoSeats.",
     ),
 )
 
@@ -821,7 +828,7 @@ HTML = r'''<!DOCTYPE html>
   </section>
 
   <section id="sfRevenueSection" hidden>
-    <h2>Faturamento reconhecido · corporate · subscription</h2>
+    <h2>Faturamento · receita reconhecida · corporate · subscription</h2>
     <p class="help" id="sfRevenueHelp"></p>
     <div class="kpis" id="sfRevenueKpis"></div>
     <div class="table-wrap" style="margin-bottom:14px">
@@ -829,10 +836,11 @@ HTML = r'''<!DOCTYPE html>
         <thead>
           <tr>
             <th>Snapshot LTM</th>
+            <th class="num">Valor pago</th>
             <th class="num">Reconhecido</th>
-            <th class="num">Corporate PJ %</th>
-            <th class="num">Subscription %</th>
-            <th class="num">N opps</th>
+            <th class="num">Corp % (rec)</th>
+            <th class="num">Sub % (rec)</th>
+            <th class="num">N empenhos</th>
           </tr>
         </thead>
         <tbody id="sfRevSnapBody"></tbody>
@@ -842,11 +850,12 @@ HTML = r'''<!DOCTYPE html>
       <table>
         <thead>
           <tr>
-            <th>Mês</th>
+            <th>Mês (voo)</th>
+            <th class="num">Valor pago</th>
             <th class="num">Reconhecido</th>
             <th class="num">Corporate PJ</th>
             <th class="num">Corp %</th>
-            <th class="num">Revo Seats</th>
+            <th class="num">Voucher RevoSeats</th>
             <th class="num">Sub %</th>
             <th class="num">N</th>
           </tr>
@@ -1066,12 +1075,13 @@ if (sf && sf.revenue) {
   const rev = sf.revenue;
   const def = rev.definition || {};
   document.getElementById('sfRevenueHelp').textContent =
-    `Reconhecido: ${def.recognized || '—'} · Corporate: ${def.corporate_mobility || '—'} · Subscription: ${def.subscription || '—'}`;
+    `Fonte: ${def.source || '—'} · Valor pago: ${def.valor_pago || '—'} · Reconhecido: ${def.recognized || '—'} · Corporate: ${def.corporate_mobility || '—'} · Subscription: ${def.subscription || '—'}`;
   const snap = rev.snapshots?.ltm_2026_06 || {};
   document.getElementById('sfRevenueKpis').innerHTML = [
-    ['LTM Jun/2026 reconhecido', fmtBRL(snap.recognized), `${fmtN(snap.n)} opportunities Pago`],
-    ['Corporate mobility', `${snap.corporate_pj_pct ?? '—'}%`, fmtBRL(snap.corporate_pj)],
-    ['Subscription Revo Seats', `${snap.subscription_pct ?? '—'}%`, fmtBRL(snap.subscription_revo_seats)],
+    ['LTM Jun/2026 valor pago', fmtBRL(snap.valor_pago), `${fmtN(snap.n)} empenhos · mês do voo`],
+    ['LTM Jun/2026 reconhecido', fmtBRL(snap.recognized), 'Empenho.ValorReconhecimentoReceita (desde ~mar/2026)'],
+    ['Corporate mobility (rec)', `${snap.corporate_pj_pct ?? '—'}%`, fmtBRL(snap.corporate_pj)],
+    ['Subscription Voucher RevoSeats', `${snap.subscription_pct ?? '—'}%`, fmtBRL(snap.subscription_revo_seats)],
   ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v}</strong><span class="sub">${sub||''}</span></article>`).join('');
   const snaps = [
     ['Jun/2026 LTM', rev.snapshots?.ltm_2026_06],
@@ -1081,6 +1091,7 @@ if (sf && sf.revenue) {
   document.getElementById('sfRevSnapBody').innerHTML = snaps.map(([lab, s]) => s ? `
     <tr>
       <td>${lab}</td>
+      <td class="num">${fmtBRL(s.valor_pago)}</td>
       <td class="num">${fmtBRL(s.recognized)}</td>
       <td class="num">${s.corporate_pj_pct ?? '—'}%</td>
       <td class="num">${s.subscription_pct ?? '—'}%</td>
@@ -1091,6 +1102,7 @@ if (sf && sf.revenue) {
     const r = rev.monthly[m];
     return `<tr>
       <td>${m}</td>
+      <td class="num">${fmtBRL(r.valor_pago)}</td>
       <td class="num">${fmtBRL(r.recognized)}</td>
       <td class="num">${fmtBRL(r.corporate_pj)}</td>
       <td class="num">${r.corporate_pj_pct ?? '—'}%</td>
@@ -1369,10 +1381,11 @@ def write_excel(data: dict, path: Path) -> None:
 
     if sf.get("revenue"):
         ws_rv = wb.create_sheet("Faturamento SF")
-        ws_rv["A1"] = "Faturamento reconhecido · corporate · subscription"
+        ws_rv["A1"] = "Faturamento · receita reconhecida · corporate · subscription"
         ws_rv["A1"].font = Font(size=14, bold=True)
         dfn = sf["revenue"].get("definition") or {}
         ws_rv["A2"] = (
+            f"Fonte: {dfn.get('source')} · Valor pago: {dfn.get('valor_pago')} · "
             f"Reconhecido: {dfn.get('recognized')} · "
             f"Corporate: {dfn.get('corporate_mobility')} · "
             f"Subscription: {dfn.get('subscription')}"
@@ -1380,7 +1393,10 @@ def write_excel(data: dict, path: Path) -> None:
         ws_rv["A4"] = "Snapshots LTM"
         ws_rv["A4"].font = Font(bold=True)
         for i, h in enumerate(
-            ["Snapshot", "Reconhecido", "Corporate PJ", "Corp %", "Revo Seats", "Sub %", "N"],
+            [
+                "Snapshot", "Valor pago", "Reconhecido", "Corporate PJ", "Corp %",
+                "Voucher RevoSeats", "Sub %", "N empenhos",
+            ],
             1,
         ):
             ws_rv.cell(5, i, h)
@@ -1394,24 +1410,30 @@ def write_excel(data: dict, path: Path) -> None:
         ):
             snap = (sf["revenue"].get("snapshots") or {}).get(key) or {}
             vals = [
-                lab, snap.get("recognized"), snap.get("corporate_pj"),
-                snap.get("corporate_pj_pct"), snap.get("subscription_revo_seats"),
-                snap.get("subscription_pct"), snap.get("n"),
+                lab, snap.get("valor_pago"), snap.get("recognized"),
+                snap.get("corporate_pj"), snap.get("corporate_pj_pct"),
+                snap.get("subscription_revo_seats"), snap.get("subscription_pct"),
+                snap.get("n"),
             ]
             for c, v in enumerate(vals, 1):
                 ws_rv.cell(r_i, c, v if v is not None else "—")
-        ws_rv["A10"] = "Mensal"
+        ws_rv["A10"] = "Mensal (mês do voo)"
         ws_rv["A10"].font = Font(bold=True)
         for i, h in enumerate(
-            ["Mês", "Reconhecido", "Corporate PJ", "Corp %", "Revo Seats", "Sub %", "N"],
+            [
+                "Mês", "Valor pago", "Reconhecido", "Corporate PJ", "Corp %",
+                "Voucher RevoSeats", "Sub %", "N",
+            ],
             1,
         ):
             ws_rv.cell(11, i, h)
         for r_i, m in enumerate(sorted((sf["revenue"].get("monthly") or {})), 12):
             r = sf["revenue"]["monthly"][m]
             vals = [
-                m, r.get("recognized"), r.get("corporate_pj"), r.get("corporate_pj_pct"),
-                r.get("subscription_revo_seats"), r.get("subscription_pct"), r.get("n"),
+                m, r.get("valor_pago"), r.get("recognized"),
+                r.get("corporate_pj"), r.get("corporate_pj_pct"),
+                r.get("subscription_revo_seats"), r.get("subscription_pct"),
+                r.get("n"),
             ]
             for c, v in enumerate(vals, 1):
                 ws_rv.cell(r_i, c, v if v is not None else None)

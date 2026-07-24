@@ -47,8 +47,9 @@ Outputs are written next to the script (gitignored): `index.html`, `data.js`, `r
 | Snapshots | Cortes fixos: `2026-06`, `2025-12`, `2024-12` |
 
 | Horas SBGR / Resto / Shuttle | Salesforce `TempoMissao__c` (min÷60), voos Executado |
-| Faturamento reconhecido | Opportunities `StageName=Pago` |
-| Corporate mobility % | Conta Pessoa Jurídica / reconhecido |
-| Subscription | Opportunity Record Type = Revo Seats |
+| Valor pago (voo) | `Servico.ValorPago__c` via Empenho, no mês do voo (relatório Financeiro) |
+| Receita reconhecida | `Empenho.ValorReconhecimentoReceita__c` (desde ~mar/2026) |
+| Corporate mobility % | Conta Faturamento PJ / reconhecido |
+| Subscription | Pagamento Record Type = Voucher RevoSeats |
 
 Excel: abas **Glossário**, **Horas SBGR**, **Faturamento SF**, **Recorrência LTM**, **Freq LTM Mensal**, **Mensal**.

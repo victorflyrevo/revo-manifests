@@ -3,6 +3,11 @@
 
 Reads SF_* from tools/kpi-dashboard/.env.local (or process env) and writes
 salesforce_kpis.json next to this script for the HTML/Excel dashboard builder.
+
+Revenue matches Financeiro reports (Validação Weekly KPI / Visão Financeira):
+  Empenho__c → Servico__c → Voo__c by flight date
+  - valor_pago: unique Servico.ValorPago__c (equals sum Empenho.ValorEmpenho__c)
+  - recognized: sum Empenho.ValorReconhecimentoReceita__c
 """
 
 from __future__ import annotations
@@ -39,7 +44,17 @@ def involves_sbgr(trecho: dict) -> bool:
     return "SBGR" in blob or "GUARULHOS" in blob
 
 
-def ltm_revenue(monthly: dict, end: str, months: int = 12) -> dict:
+def query_all(sf, soql: str) -> list[dict]:
+    rows: list[dict] = []
+    result = sf.query(soql)
+    rows.extend(result["records"])
+    while not result["done"]:
+        result = sf.query_more(result["nextRecordsUrl"], True)
+        rows.extend(result["records"])
+    return rows
+
+
+def ltm_bucket(monthly: dict, end: str, months: int = 12) -> dict:
     y, m = map(int, end.split("-"))
     keys = []
     for _ in range(months):
@@ -48,31 +63,61 @@ def ltm_revenue(monthly: dict, end: str, months: int = 12) -> dict:
         if m == 0:
             m = 12
             y -= 1
-    tot = corp = sub = 0.0
+    valor_pago = recognized = corp_pago = corp_rec = sub_pago = sub_rec = 0.0
     n = 0
-    by_type: dict[str, float] = defaultdict(float)
+    by_pay_rt: dict[str, float] = defaultdict(float)
+    by_voo_tipo: dict[str, float] = defaultdict(float)
     for k in keys:
         b = monthly.get(k)
         if not b:
             continue
-        tot += b["recognized"]
-        corp += b["corporate_pj"]
-        sub += b["subscription_revo_seats"]
+        valor_pago += b["valor_pago"]
+        recognized += b["recognized"]
+        corp_pago += b["corporate_pj_pago"]
+        corp_rec += b["corporate_pj"]
+        sub_pago += b["subscription_revo_seats_pago"]
+        sub_rec += b["subscription_revo_seats"]
         n += b["n"]
-        for t, v in b["by_type"].items():
-            by_type[t] += v
+        for t, v in b["by_payment_rt"].items():
+            by_pay_rt[t] += v
+        for t, v in b["by_voo_tipo"].items():
+            by_voo_tipo[t] += v
     return {
         "end": end,
-        "recognized": round(tot, 2),
+        "valor_pago": round(valor_pago, 2),
+        "recognized": round(recognized, 2),
         "n": n,
-        "corporate_pj": round(corp, 2),
-        "corporate_pj_pct": round(corp / tot * 100, 2) if tot else 0.0,
-        "subscription_revo_seats": round(sub, 2),
-        "subscription_pct": round(sub / tot * 100, 2) if tot else 0.0,
-        "by_type": {
-            k: round(v, 2) for k, v in sorted(by_type.items(), key=lambda x: -x[1])
+        "corporate_pj": round(corp_rec, 2),
+        "corporate_pj_pct": round(corp_rec / recognized * 100, 2) if recognized else 0.0,
+        "corporate_pj_pago": round(corp_pago, 2),
+        "corporate_pj_pago_pct": round(corp_pago / valor_pago * 100, 2)
+        if valor_pago
+        else 0.0,
+        "subscription_revo_seats": round(sub_rec, 2),
+        "subscription_pct": round(sub_rec / recognized * 100, 2) if recognized else 0.0,
+        "subscription_revo_seats_pago": round(sub_pago, 2),
+        "subscription_pago_pct": round(sub_pago / valor_pago * 100, 2)
+        if valor_pago
+        else 0.0,
+        "by_payment_rt": {
+            k: round(v, 2) for k, v in sorted(by_pay_rt.items(), key=lambda x: -x[1])
+        },
+        "by_voo_tipo": {
+            k: round(v, 2) for k, v in sorted(by_voo_tipo.items(), key=lambda x: -x[1])
         },
     }
+
+
+def account_rt_name(servico: dict) -> str:
+    fat = ((servico.get("ContaFaturamento__r") or {}).get("RecordType") or {}).get(
+        "Name"
+    ) or ""
+    if fat:
+        return fat
+    return (
+        ((servico.get("ContaComprador__r") or {}).get("RecordType") or {}).get("Name")
+        or ""
+    )
 
 
 def main() -> None:
@@ -96,30 +141,16 @@ def main() -> None:
     )
     print("Connected:", sf.sf_instance)
 
-    rt_map = {
-        rt["recordTypeId"]: rt["name"]
-        for rt in sf.Opportunity.describe()["recordTypeInfos"]
-    }
-    acct_rt = {
-        rt["recordTypeId"]: rt["name"]
-        for rt in sf.Account.describe()["recordTypeInfos"]
-    }
-    revo_seats_rt = {k for k, v in rt_map.items() if v == "Revo Seats"}
-
     # --- Hours ---
-    trechos: list[dict] = []
-    result = sf.query(
+    trechos = query_all(
+        sf,
         """
         SELECT Voo__c, CodigoOrigem__c, CodigoDestino__c, OrigemTexto__c, DestinoTexto__c,
                Voo__r.DiaVoo__c, Voo__r.Tipo__c, Voo__r.Status__c, Voo__r.TempoMissao__c
         FROM Trecho__c
         WHERE Voo__r.Status__c = 'Executado' AND Voo__r.DiaVoo__c = LAST_N_DAYS:800
-        """
+        """,
     )
-    trechos.extend(result["records"])
-    while not result["done"]:
-        result = sf.query_more(result["nextRecordsUrl"], True)
-        trechos.extend(result["records"])
 
     voo: dict[str, dict] = {}
     for r in trechos:
@@ -173,53 +204,117 @@ def main() -> None:
     max_sbgr = max(months_h, key=lambda m: monthly_h[m]["hours_sbgr"])
     max_shuttle = max(months_h, key=lambda m: monthly_h[m]["hours_shuttle"])
 
-    # --- Revenue ---
-    opps: list[dict] = []
-    result = sf.query(
+    # --- Revenue (Empenho / Servico / Voo — same as Financeiro Weekly KPI) ---
+    empenhos = query_all(
+        sf,
         """
-        SELECT CloseDate, Amount, Type, StageName, RecordTypeId,
-               Account.RecordTypeId, TotalRevoSeats__c
-        FROM Opportunity
-        WHERE StageName = 'Pago' AND CloseDate = LAST_N_DAYS:900 AND Amount != null
-        """
+        SELECT Servico__c, ValorReconhecimentoReceita__c, ValorEmpenho__c, ReconheceReceita__c,
+               Servico__r.Status__c, Servico__r.ValorPago__c, Servico__r.TotalRevoSeats__c,
+               Servico__r.Voo__r.DiaVoo__c, Servico__r.Voo__r.DataHoraVoo__c,
+               Servico__r.Voo__r.Tipo__c,
+               Servico__r.ContaFaturamento__r.RecordType.Name,
+               Servico__r.ContaComprador__r.RecordType.Name,
+               Servico__r.Oportunidade__r.RecordType.Name,
+               Servico__r.Oportunidade__r.Type,
+               Pagamento__r.RecordType.Name, Pagamento__r.StatusPagamento__c
+        FROM Empenho__c
+        WHERE Servico__r.Voo__r.DataHoraVoo__c = LAST_N_DAYS:800
+           OR Servico__r.Voo__r.DiaVoo__c = LAST_N_DAYS:800
+        """,
     )
-    opps.extend(result["records"])
-    while not result["done"]:
-        result = sf.query_more(result["nextRecordsUrl"], True)
-        opps.extend(result["records"])
 
     monthly_r: dict[str, dict] = defaultdict(
         lambda: {
             "recognized": 0.0,
+            "valor_pago_by_servico": {},
             "n": 0,
             "corporate_pj": 0.0,
+            "corporate_pj_pago": 0.0,
             "consumer_pf": 0.0,
-            "other_acct": 0.0,
             "subscription_revo_seats": 0.0,
+            "subscription_revo_seats_pago": 0.0,
             "subscription_n": 0,
-            "by_type": defaultdict(float),
+            "by_payment_rt": defaultdict(float),
+            "by_voo_tipo": defaultdict(float),
+            "by_servico_status": defaultdict(int),
         }
     )
-    for r in opps:
-        m = (r.get("CloseDate") or "")[:7]
-        if not m:
-            continue
-        amt = float(r.get("Amount") or 0)
-        b = monthly_r[m]
-        b["recognized"] += amt
-        b["n"] += 1
-        b["by_type"][r.get("Type") or "Unknown"] += amt
-        if r.get("RecordTypeId") in revo_seats_rt:
-            b["subscription_revo_seats"] += amt
-            b["subscription_n"] += 1
-        art = acct_rt.get((r.get("Account") or {}).get("RecordTypeId"), "")
-        if "Jurídica" in art:
-            b["corporate_pj"] += amt
-        elif "Física" in art or "pessoal" in art.lower():
-            b["consumer_pf"] += amt
-        else:
-            b["other_acct"] += amt
 
+    for r in empenhos:
+        serv = r.get("Servico__r") or {}
+        vr = serv.get("Voo__r") or {}
+        day = vr.get("DiaVoo__c") or (vr.get("DataHoraVoo__c") or "")[:10]
+        if not day:
+            continue
+        m = day[:7]
+        b = monthly_r[m]
+        rec = float(r.get("ValorReconhecimentoReceita__c") or 0)
+        emp = float(r.get("ValorEmpenho__c") or 0)
+        pago = float(serv.get("ValorPago__c") or 0)
+        sid = r.get("Servico__c")
+        if sid:
+            b["valor_pago_by_servico"][sid] = pago
+
+        b["recognized"] += rec
+        b["n"] += 1
+        b["by_servico_status"][serv.get("Status__c") or "null"] += 1
+
+        pay_rt = ((r.get("Pagamento__r") or {}).get("RecordType") or {}).get("Name") or (
+            "Unknown"
+        )
+        voo_tipo = vr.get("Tipo__c") or "Unknown"
+        b["by_payment_rt"][pay_rt] += rec if rec else emp
+        b["by_voo_tipo"][voo_tipo] += rec if rec else emp
+
+        art = account_rt_name(serv)
+        is_sub = pay_rt == "Voucher RevoSeats"
+        if "Jurídica" in art:
+            b["corporate_pj"] += rec
+            b["corporate_pj_pago"] += emp
+        elif "Física" in art or "pessoal" in art.lower():
+            b["consumer_pf"] += rec
+        if is_sub:
+            b["subscription_revo_seats"] += rec
+            b["subscription_revo_seats_pago"] += emp
+            b["subscription_n"] += 1
+
+    monthly_out: dict[str, dict] = {}
+    for m, b in monthly_r.items():
+        valor_pago = sum(b["valor_pago_by_servico"].values())
+        rec = b["recognized"]
+        monthly_out[m] = {
+            "valor_pago": round(valor_pago, 2),
+            "recognized": round(rec, 2),
+            "n": b["n"],
+            "n_servicos": len(b["valor_pago_by_servico"]),
+            "corporate_pj": round(b["corporate_pj"], 2),
+            "corporate_pj_pct": round(b["corporate_pj"] / rec * 100, 2) if rec else 0.0,
+            "corporate_pj_pago": round(b["corporate_pj_pago"], 2),
+            "corporate_pj_pago_pct": round(
+                b["corporate_pj_pago"] / valor_pago * 100, 2
+            )
+            if valor_pago
+            else 0.0,
+            "consumer_pf": round(b["consumer_pf"], 2),
+            "subscription_revo_seats": round(b["subscription_revo_seats"], 2),
+            "subscription_pct": round(b["subscription_revo_seats"] / rec * 100, 2)
+            if rec
+            else 0.0,
+            "subscription_revo_seats_pago": round(b["subscription_revo_seats_pago"], 2),
+            "subscription_pago_pct": round(
+                b["subscription_revo_seats_pago"] / valor_pago * 100, 2
+            )
+            if valor_pago
+            else 0.0,
+            "subscription_n": b["subscription_n"],
+            "by_payment_rt": {
+                k: round(v, 2) for k, v in b["by_payment_rt"].items()
+            },
+            "by_voo_tipo": {k: round(v, 2) for k, v in b["by_voo_tipo"].items()},
+            "by_servico_status": dict(b["by_servico_status"]),
+        }
+
+    # ltm_revenue helper expects nested monthly with same keys used in ltm_bucket
     payload = {
         "generated_from": f"Salesforce API {sf.sf_instance}",
         "hours": {
@@ -259,38 +354,31 @@ def main() -> None:
         },
         "revenue": {
             "definition": {
-                "recognized": "Opportunity.StageName = 'Pago' (CloseDate)",
-                "corporate_mobility": (
-                    "Account.RecordType = Cliente - Pessoa Jurídica"
+                "source": (
+                    "Empenho__c + Servico__c + Voo__c "
+                    "(relatório Financeiro · Validação Weekly KPI)"
                 ),
-                "subscription": "Opportunity.RecordType = Revo Seats",
+                "valor_pago": (
+                    "Soma de Servico.ValorPago__c distintos por voo "
+                    "(equivale a Empenho.ValorEmpenho__c); data = DiaVoo/DataHoraVoo"
+                ),
+                "recognized": (
+                    "Soma de Empenho.ValorReconhecimentoReceita__c "
+                    "(campo populado a partir de ~mar/2026)"
+                ),
+                "corporate_mobility": (
+                    "Conta Faturamento (fallback Comprador) Record Type "
+                    "Cliente - Pessoa Jurídica"
+                ),
+                "subscription": (
+                    "Pagamento.RecordType = Voucher RevoSeats"
+                ),
             },
-            "monthly": {
-                m: {
-                    "recognized": round(b["recognized"], 2),
-                    "n": b["n"],
-                    "corporate_pj": round(b["corporate_pj"], 2),
-                    "corporate_pj_pct": round(
-                        b["corporate_pj"] / b["recognized"] * 100, 2
-                    )
-                    if b["recognized"]
-                    else 0,
-                    "consumer_pf": round(b["consumer_pf"], 2),
-                    "subscription_revo_seats": round(b["subscription_revo_seats"], 2),
-                    "subscription_pct": round(
-                        b["subscription_revo_seats"] / b["recognized"] * 100, 2
-                    )
-                    if b["recognized"]
-                    else 0,
-                    "subscription_n": b["subscription_n"],
-                    "by_type": {k: round(v, 2) for k, v in b["by_type"].items()},
-                }
-                for m, b in monthly_r.items()
-            },
+            "monthly": monthly_out,
             "snapshots": {
-                "ltm_2026_06": ltm_revenue(monthly_r, "2026-06"),
-                "ltm_2025_12": ltm_revenue(monthly_r, "2025-12"),
-                "ltm_2024_12": ltm_revenue(monthly_r, "2024-12"),
+                "ltm_2026_06": ltm_bucket(monthly_out, "2026-06"),
+                "ltm_2025_12": ltm_bucket(monthly_out, "2025-12"),
+                "ltm_2024_12": ltm_bucket(monthly_out, "2024-12"),
             },
         },
     }
@@ -300,6 +388,7 @@ def main() -> None:
     print("Wrote", out_path)
     print("Hours max all", payload["hours"]["historic_max"]["all"])
     print("Jun/2026 hours", payload["hours"]["latest"])
+    print("May/2026 revenue", monthly_out.get("2026-05"))
     print("LTM Jun/2026 revenue", payload["revenue"]["snapshots"]["ltm_2026_06"])
 
 
