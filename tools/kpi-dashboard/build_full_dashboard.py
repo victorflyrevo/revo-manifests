@@ -213,6 +213,30 @@ GLOSSARY = (
         "SIAV→SIAV / cancelados",
         "Treinos SIAV→SIAV e abas canceladas são excluídos das contagens deste dashboard.",
     ),
+    (
+        "Horas voadas (SF)",
+        "Salesforce Voo__c.TempoMissao__c em minutos ÷ 60, só Status=Executado. Fonte: pull_salesforce_kpis.py.",
+    ),
+    (
+        "SBGR vs Resto (horas)",
+        "Missão inteira conta em SBGR se algum trecho toca SBGR/Guarulhos; senão vai para Resto.",
+    ),
+    (
+        "Shuttle (horas)",
+        "Voos Salesforce com Tipo contendo Shuttle (ShuttleSeat / ShuttleFullCabin).",
+    ),
+    (
+        "Faturamento reconhecido",
+        "Soma de Opportunity.Amount com StageName = Pago (data de fechamento).",
+    ),
+    (
+        "Corporate mobility %",
+        "% do faturamento reconhecido cuja Conta é Record Type Cliente - Pessoa Jurídica.",
+    ),
+    (
+        "Subscription (Revo Seats)",
+        "Opportunities com Record Type = Revo Seats (assinatura / pacote de assentos).",
+    ),
 )
 
 
@@ -773,6 +797,65 @@ HTML = r'''<!DOCTYPE html>
     <div class="kpis" id="baseKpis"></div>
   </section>
 
+  <section id="sfHoursSection" hidden>
+    <h2>Shuttle equivalent · horas voadas (Salesforce)</h2>
+    <p class="help" id="sfHoursHelp"></p>
+    <div class="kpis" id="sfHoursKpis"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mês</th>
+            <th class="num">Horas total</th>
+            <th class="num">SBGR</th>
+            <th class="num">Resto</th>
+            <th class="num">% SBGR</th>
+            <th class="num">Shuttle</th>
+            <th class="num">Shuttle∩SBGR</th>
+            <th class="num">Voos</th>
+          </tr>
+        </thead>
+        <tbody id="sfHoursBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="sfRevenueSection" hidden>
+    <h2>Faturamento reconhecido · corporate · subscription</h2>
+    <p class="help" id="sfRevenueHelp"></p>
+    <div class="kpis" id="sfRevenueKpis"></div>
+    <div class="table-wrap" style="margin-bottom:14px">
+      <table>
+        <thead>
+          <tr>
+            <th>Snapshot LTM</th>
+            <th class="num">Reconhecido</th>
+            <th class="num">Corporate PJ %</th>
+            <th class="num">Subscription %</th>
+            <th class="num">N opps</th>
+          </tr>
+        </thead>
+        <tbody id="sfRevSnapBody"></tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mês</th>
+            <th class="num">Reconhecido</th>
+            <th class="num">Corporate PJ</th>
+            <th class="num">Corp %</th>
+            <th class="num">Revo Seats</th>
+            <th class="num">Sub %</th>
+            <th class="num">N</th>
+          </tr>
+        </thead>
+        <tbody id="sfRevMonthBody"></tbody>
+      </table>
+    </div>
+  </section>
+
   <section>
     <h2>Recorrência LTM</h2>
     <p class="help" id="ltmHelp"></p>
@@ -934,17 +1017,89 @@ const monthly = D.monthly || [];
 const snapshots = D.snapshots || [];
 const periodFreq = D.period_frequency || {};
 const glossary = D.glossary || [];
+const sf = D.salesforce || null;
 const fmt = (v, suffix='%') => v == null ? '—' : `${v > 0 ? '+' : ''}${v}${suffix}`;
 const fmtN = (v) => v == null ? '—' : String(v);
 const fmtDelta = (v) => v == null ? '—' : `${v > 0 ? '+' : ''}${v}`;
 const cls = (v) => v == null ? 'na' : (v >= 0 ? 'pos' : 'neg');
 const pctOf = (n, den) => (!den || n == null) ? '—' : `${(n / den * 100).toFixed(1)}%`;
+const fmtBRL = (v) => v == null ? '—' : Number(v).toLocaleString('pt-BR', {style:'currency', currency:'BRL', maximumFractionDigits:0});
+const fmtH = (v) => v == null ? '—' : Number(v).toLocaleString('pt-BR', {maximumFractionDigits:1});
 
 document.getElementById('glossaryBody').innerHTML = glossary.map(g => `
   <tr>
     <td><strong>${g.term}</strong></td>
     <td style="white-space:normal;max-width:52em">${g.definition}</td>
   </tr>`).join('');
+
+if (sf && sf.hours) {
+  document.getElementById('sfHoursSection').hidden = false;
+  const h = sf.hours;
+  const max = h.historic_max || {};
+  document.getElementById('sfHoursHelp').textContent =
+    `${h.method || ''} · Máx histórico: total ${max.all?.month} ${fmtH(max.all?.hours)}h · SBGR ${max.sbgr?.month} ${fmtH(max.sbgr?.hours)}h · Shuttle ${max.shuttle?.month} ${fmtH(max.shuttle?.hours)}h`;
+  const latest = h.latest || {};
+  document.getElementById('sfHoursKpis').innerHTML = [
+    ['Horas (jun/2026)', fmtH(latest.hours_all), `${fmtN(latest.flights)} voos executados`],
+    ['SBGR', fmtH(latest.hours_sbgr), `${pctOf(latest.hours_sbgr, latest.hours_all)} do total`],
+    ['Resto', fmtH(latest.hours_resto), `Shuttle ${fmtH(latest.hours_shuttle)}h · ∩SBGR ${fmtH(latest.hours_shuttle_sbgr)}h`],
+  ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v}</strong><span class="sub">${sub||''}</span></article>`).join('');
+  const months = Object.keys(h.monthly || {}).sort();
+  document.getElementById('sfHoursBody').innerHTML = months.map(m => {
+    const r = h.monthly[m];
+    const mark = (max.all?.month===m || max.sbgr?.month===m || max.shuttle?.month===m) ? ' ★' : '';
+    return `<tr>
+      <td>${m}${mark}</td>
+      <td class="num">${fmtH(r.hours_all)}</td>
+      <td class="num">${fmtH(r.hours_sbgr)}</td>
+      <td class="num">${fmtH(r.hours_resto)}</td>
+      <td class="num">${pctOf(r.hours_sbgr, r.hours_all)}</td>
+      <td class="num">${fmtH(r.hours_shuttle)}</td>
+      <td class="num">${fmtH(r.hours_shuttle_sbgr)}</td>
+      <td class="num">${fmtN(r.flights)}</td>
+    </tr>`;
+  }).join('');
+}
+
+if (sf && sf.revenue) {
+  document.getElementById('sfRevenueSection').hidden = false;
+  const rev = sf.revenue;
+  const def = rev.definition || {};
+  document.getElementById('sfRevenueHelp').textContent =
+    `Reconhecido: ${def.recognized || '—'} · Corporate: ${def.corporate_mobility || '—'} · Subscription: ${def.subscription || '—'}`;
+  const snap = rev.snapshots?.ltm_2026_06 || {};
+  document.getElementById('sfRevenueKpis').innerHTML = [
+    ['LTM Jun/2026 reconhecido', fmtBRL(snap.recognized), `${fmtN(snap.n)} opportunities Pago`],
+    ['Corporate mobility', `${snap.corporate_pj_pct ?? '—'}%`, fmtBRL(snap.corporate_pj)],
+    ['Subscription Revo Seats', `${snap.subscription_pct ?? '—'}%`, fmtBRL(snap.subscription_revo_seats)],
+  ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v}</strong><span class="sub">${sub||''}</span></article>`).join('');
+  const snaps = [
+    ['Jun/2026 LTM', rev.snapshots?.ltm_2026_06],
+    ['Dez/2025 LTM', rev.snapshots?.ltm_2025_12],
+    ['Dez/2024 LTM', rev.snapshots?.ltm_2024_12],
+  ];
+  document.getElementById('sfRevSnapBody').innerHTML = snaps.map(([lab, s]) => s ? `
+    <tr>
+      <td>${lab}</td>
+      <td class="num">${fmtBRL(s.recognized)}</td>
+      <td class="num">${s.corporate_pj_pct ?? '—'}%</td>
+      <td class="num">${s.subscription_pct ?? '—'}%</td>
+      <td class="num">${fmtN(s.n)}</td>
+    </tr>` : '').join('');
+  const rm = Object.keys(rev.monthly || {}).sort();
+  document.getElementById('sfRevMonthBody').innerHTML = rm.map(m => {
+    const r = rev.monthly[m];
+    return `<tr>
+      <td>${m}</td>
+      <td class="num">${fmtBRL(r.recognized)}</td>
+      <td class="num">${fmtBRL(r.corporate_pj)}</td>
+      <td class="num">${r.corporate_pj_pct ?? '—'}%</td>
+      <td class="num">${fmtBRL(r.subscription_revo_seats)}</td>
+      <td class="num">${r.subscription_pct ?? '—'}%</td>
+      <td class="num">${fmtN(r.n)}</td>
+    </tr>`;
+  }).join('');
+}
 
 const gaps = monthly.filter(r => r.data_gap);
 document.getElementById('quality').innerHTML = gaps.length
@@ -1148,6 +1303,17 @@ line('chartNew', [{
 '''
 
 
+def load_salesforce_kpis() -> Optional[dict]:
+    path = OUT / "salesforce_kpis.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"Could not load salesforce_kpis.json: {exc}")
+        return None
+
+
 def write_excel(data: dict, path: Path) -> None:
     from openpyxl import Workbook
     from openpyxl.chart import LineChart, Reference
@@ -1155,6 +1321,7 @@ def write_excel(data: dict, path: Path) -> None:
 
     wb = Workbook()
     s = data["summary"]
+    sf = data.get("salesforce") or {}
 
     ws_g = wb.active
     ws_g.title = "Glossário"
@@ -1170,6 +1337,84 @@ def write_excel(data: dict, path: Path) -> None:
         ws_g.cell(r_i, 2, definition)
     ws_g.column_dimensions["A"].width = 28
     ws_g.column_dimensions["B"].width = 92
+
+    if sf.get("hours"):
+        ws_h = wb.create_sheet("Horas SBGR")
+        ws_h["A1"] = "Shuttle equivalent · horas voadas (Salesforce)"
+        ws_h["A1"].font = Font(size=14, bold=True)
+        ws_h["A2"] = sf["hours"].get("method") or ""
+        mx = sf["hours"].get("historic_max") or {}
+        ws_h["A3"] = (
+            f"Máx total {mx.get('all',{}).get('month')} {mx.get('all',{}).get('hours')}h · "
+            f"SBGR {mx.get('sbgr',{}).get('month')} {mx.get('sbgr',{}).get('hours')}h · "
+            f"Shuttle {mx.get('shuttle',{}).get('month')} {mx.get('shuttle',{}).get('hours')}h"
+        )
+        headers_h = [
+            "Mês", "Horas total", "SBGR", "Resto", "% SBGR",
+            "Shuttle", "Shuttle∩SBGR", "Voos", "Voos SBGR", "Voos Shuttle",
+        ]
+        for i, h in enumerate(headers_h, 1):
+            ws_h.cell(5, i, h)
+        for r_i, m in enumerate(sorted((sf["hours"].get("monthly") or {})), 6):
+            r = sf["hours"]["monthly"][m]
+            tot = r.get("hours_all") or 0
+            vals = [
+                m, r.get("hours_all"), r.get("hours_sbgr"), r.get("hours_resto"),
+                round(r.get("hours_sbgr", 0) / tot * 100, 1) if tot else 0,
+                r.get("hours_shuttle"), r.get("hours_shuttle_sbgr"),
+                r.get("flights"), r.get("flights_sbgr"), r.get("flights_shuttle"),
+            ]
+            for c, v in enumerate(vals, 1):
+                ws_h.cell(r_i, c, v)
+
+    if sf.get("revenue"):
+        ws_rv = wb.create_sheet("Faturamento SF")
+        ws_rv["A1"] = "Faturamento reconhecido · corporate · subscription"
+        ws_rv["A1"].font = Font(size=14, bold=True)
+        dfn = sf["revenue"].get("definition") or {}
+        ws_rv["A2"] = (
+            f"Reconhecido: {dfn.get('recognized')} · "
+            f"Corporate: {dfn.get('corporate_mobility')} · "
+            f"Subscription: {dfn.get('subscription')}"
+        )
+        ws_rv["A4"] = "Snapshots LTM"
+        ws_rv["A4"].font = Font(bold=True)
+        for i, h in enumerate(
+            ["Snapshot", "Reconhecido", "Corporate PJ", "Corp %", "Revo Seats", "Sub %", "N"],
+            1,
+        ):
+            ws_rv.cell(5, i, h)
+        for r_i, (lab, key) in enumerate(
+            [
+                ("Jun/2026 LTM", "ltm_2026_06"),
+                ("Dez/2025 LTM", "ltm_2025_12"),
+                ("Dez/2024 LTM", "ltm_2024_12"),
+            ],
+            6,
+        ):
+            snap = (sf["revenue"].get("snapshots") or {}).get(key) or {}
+            vals = [
+                lab, snap.get("recognized"), snap.get("corporate_pj"),
+                snap.get("corporate_pj_pct"), snap.get("subscription_revo_seats"),
+                snap.get("subscription_pct"), snap.get("n"),
+            ]
+            for c, v in enumerate(vals, 1):
+                ws_rv.cell(r_i, c, v if v is not None else "—")
+        ws_rv["A10"] = "Mensal"
+        ws_rv["A10"].font = Font(bold=True)
+        for i, h in enumerate(
+            ["Mês", "Reconhecido", "Corporate PJ", "Corp %", "Revo Seats", "Sub %", "N"],
+            1,
+        ):
+            ws_rv.cell(11, i, h)
+        for r_i, m in enumerate(sorted((sf["revenue"].get("monthly") or {})), 12):
+            r = sf["revenue"]["monthly"][m]
+            vals = [
+                m, r.get("recognized"), r.get("corporate_pj"), r.get("corporate_pj_pct"),
+                r.get("subscription_revo_seats"), r.get("subscription_pct"), r.get("n"),
+            ]
+            for c, v in enumerate(vals, 1):
+                ws_rv.cell(r_i, c, v if v is not None else None)
 
     ws_rec = wb.create_sheet("Recorrência LTM")
     ws_rec["A1"] = "REVO · Recorrência LTM"
@@ -1420,6 +1665,12 @@ def main() -> None:
         (OUT / "boardings_api.csv").write_text(buf.getvalue(), encoding="utf-8")
 
     data = compute(rows, summary, monthly_api, routes, top, source)
+    sf_kpis = load_salesforce_kpis()
+    if sf_kpis:
+        data["salesforce"] = sf_kpis
+        print("Included Salesforce KPIs from salesforce_kpis.json")
+    else:
+        print("No salesforce_kpis.json — run pull_salesforce_kpis.py to add hours/revenue")
 
     (OUT / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     (OUT / "monthly.json").write_text(json.dumps(monthly_api, indent=2), encoding="utf-8")
