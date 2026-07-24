@@ -1050,19 +1050,14 @@ if (sf && sf.revenue) {
   document.getElementById('sfRevenueSection').hidden = false;
   const rev = sf.revenue;
   const snap = rev.snapshots?.ltm_2026_06 || {};
-  const corpPct = snap.corporate_pj_pago_pct ?? snap.corporate_pj_pct;
-  const corpAmt = snap.corporate_pj_pago ?? snap.corporate_pj;
   document.getElementById('sfRevenueKpis').innerHTML = [
     ['Faturamento LTM Jun/2026', fmtBRL(snap.valor_pago), 'base de vendas · mês do voo'],
-    ['Corporate mobility', `${corpPct ?? '—'}%`, fmtBRL(corpAmt) + ' do faturamento LTM'],
+    ['Corporate mobility', `${snap.corporate_pj_pct ?? '—'}%`, fmtBRL(snap.corporate_pj) + ' do faturamento LTM'],
   ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v}</strong><span class="sub">${sub||''}</span></article>`).join('');
   const rm = Object.keys(rev.monthly || {}).sort();
   const salesRows = rm.map(m => {
     const r = rev.monthly[m];
-    const fat = r.valor_pago;
-    const corp = r.corporate_pj_pago ?? r.corporate_pj;
-    const pct = r.corporate_pj_pago_pct ?? r.corporate_pj_pct;
-    return { m, fat, corp, pct };
+    return { m, fat: r.valor_pago, corp: r.corporate_pj, pct: r.corporate_pj_pct };
   });
   document.getElementById('sfRevMonthBody').innerHTML = salesRows.map(r => `
     <tr>
@@ -1368,8 +1363,8 @@ def write_excel(data: dict, path: Path) -> None:
         ws_rv["A5"] = "Faturamento"
         ws_rv["B5"] = snap.get("valor_pago")
         ws_rv["A6"] = "Corporate mobility %"
-        ws_rv["B6"] = snap.get("corporate_pj_pago_pct")
-        ws_rv["C6"] = snap.get("corporate_pj_pago")
+        ws_rv["B6"] = snap.get("corporate_pj_pct")
+        ws_rv["C6"] = snap.get("corporate_pj")
         ws_rv["A8"] = "Mensal"
         ws_rv["A8"].font = Font(bold=True)
         for i, h in enumerate(
@@ -1382,8 +1377,8 @@ def write_excel(data: dict, path: Path) -> None:
             vals = [
                 m,
                 r.get("valor_pago"),
-                r.get("corporate_pj_pago"),
-                r.get("corporate_pj_pago_pct"),
+                r.get("corporate_pj"),
+                r.get("corporate_pj_pct"),
             ]
             for c, v in enumerate(vals, 1):
                 ws_rv.cell(r_i, c, v if v is not None else None)

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Pull shuttle hours (SBGR vs rest) and recognized revenue KPIs from Salesforce.
+"""Pull shuttle hours (SBGR vs rest) and sales-base KPIs from Salesforce.
 
 Reads SF_* from tools/kpi-dashboard/.env.local (or process env) and writes
 salesforce_kpis.json next to this script for the HTML/Excel dashboard builder.
 
-Revenue matches Financeiro reports (Validação Weekly KPI / Visão Financeira):
+Revenue matches Financeiro reports (Validação Weekly KPI):
   Empenho__c → Servico__c → Voo__c by flight date
-  - valor_pago: unique Servico.ValorPago__c (equals sum Empenho.ValorEmpenho__c)
-  - recognized: sum Empenho.ValorReconhecimentoReceita__c
+  - faturamento (valor_pago): unique Servico.ValorPago__c
+  - corporate %: Conta Faturamento PJ share of empenho/valor pago
 """
 
 from __future__ import annotations
@@ -63,48 +63,21 @@ def ltm_bucket(monthly: dict, end: str, months: int = 12) -> dict:
         if m == 0:
             m = 12
             y -= 1
-    valor_pago = recognized = corp_pago = corp_rec = sub_pago = sub_rec = 0.0
+    valor_pago = corp = 0.0
     n = 0
-    by_pay_rt: dict[str, float] = defaultdict(float)
-    by_voo_tipo: dict[str, float] = defaultdict(float)
     for k in keys:
         b = monthly.get(k)
         if not b:
             continue
         valor_pago += b["valor_pago"]
-        recognized += b["recognized"]
-        corp_pago += b["corporate_pj_pago"]
-        corp_rec += b["corporate_pj"]
-        sub_pago += b["subscription_revo_seats_pago"]
-        sub_rec += b["subscription_revo_seats"]
+        corp += b["corporate_pj"]
         n += b["n"]
-        for t, v in b["by_payment_rt"].items():
-            by_pay_rt[t] += v
-        for t, v in b["by_voo_tipo"].items():
-            by_voo_tipo[t] += v
     return {
         "end": end,
         "valor_pago": round(valor_pago, 2),
-        "recognized": round(recognized, 2),
         "n": n,
-        "corporate_pj": round(corp_rec, 2),
-        "corporate_pj_pct": round(corp_rec / recognized * 100, 2) if recognized else 0.0,
-        "corporate_pj_pago": round(corp_pago, 2),
-        "corporate_pj_pago_pct": round(corp_pago / valor_pago * 100, 2)
-        if valor_pago
-        else 0.0,
-        "subscription_revo_seats": round(sub_rec, 2),
-        "subscription_pct": round(sub_rec / recognized * 100, 2) if recognized else 0.0,
-        "subscription_revo_seats_pago": round(sub_pago, 2),
-        "subscription_pago_pct": round(sub_pago / valor_pago * 100, 2)
-        if valor_pago
-        else 0.0,
-        "by_payment_rt": {
-            k: round(v, 2) for k, v in sorted(by_pay_rt.items(), key=lambda x: -x[1])
-        },
-        "by_voo_tipo": {
-            k: round(v, 2) for k, v in sorted(by_voo_tipo.items(), key=lambda x: -x[1])
-        },
+        "corporate_pj": round(corp, 2),
+        "corporate_pj_pct": round(corp / valor_pago * 100, 2) if valor_pago else 0.0,
     }
 
 
@@ -204,19 +177,15 @@ def main() -> None:
     max_sbgr = max(months_h, key=lambda m: monthly_h[m]["hours_sbgr"])
     max_shuttle = max(months_h, key=lambda m: monthly_h[m]["hours_shuttle"])
 
-    # --- Revenue (Empenho / Servico / Voo — same as Financeiro Weekly KPI) ---
+    # --- Sales base (Empenho / Servico / Voo) ---
     empenhos = query_all(
         sf,
         """
-        SELECT Servico__c, ValorReconhecimentoReceita__c, ValorEmpenho__c, ReconheceReceita__c,
-               Servico__r.Status__c, Servico__r.ValorPago__c, Servico__r.TotalRevoSeats__c,
+        SELECT Servico__c, ValorEmpenho__c,
+               Servico__r.ValorPago__c,
                Servico__r.Voo__r.DiaVoo__c, Servico__r.Voo__r.DataHoraVoo__c,
-               Servico__r.Voo__r.Tipo__c,
                Servico__r.ContaFaturamento__r.RecordType.Name,
-               Servico__r.ContaComprador__r.RecordType.Name,
-               Servico__r.Oportunidade__r.RecordType.Name,
-               Servico__r.Oportunidade__r.Type,
-               Pagamento__r.RecordType.Name, Pagamento__r.StatusPagamento__c
+               Servico__r.ContaComprador__r.RecordType.Name
         FROM Empenho__c
         WHERE Servico__r.Voo__r.DataHoraVoo__c = LAST_N_DAYS:800
            OR Servico__r.Voo__r.DiaVoo__c = LAST_N_DAYS:800
@@ -225,18 +194,9 @@ def main() -> None:
 
     monthly_r: dict[str, dict] = defaultdict(
         lambda: {
-            "recognized": 0.0,
             "valor_pago_by_servico": {},
             "n": 0,
             "corporate_pj": 0.0,
-            "corporate_pj_pago": 0.0,
-            "consumer_pf": 0.0,
-            "subscription_revo_seats": 0.0,
-            "subscription_revo_seats_pago": 0.0,
-            "subscription_n": 0,
-            "by_payment_rt": defaultdict(float),
-            "by_voo_tipo": defaultdict(float),
-            "by_servico_status": defaultdict(int),
         }
     )
 
@@ -248,73 +208,27 @@ def main() -> None:
             continue
         m = day[:7]
         b = monthly_r[m]
-        rec = float(r.get("ValorReconhecimentoReceita__c") or 0)
         emp = float(r.get("ValorEmpenho__c") or 0)
         pago = float(serv.get("ValorPago__c") or 0)
         sid = r.get("Servico__c")
         if sid:
             b["valor_pago_by_servico"][sid] = pago
-
-        b["recognized"] += rec
         b["n"] += 1
-        b["by_servico_status"][serv.get("Status__c") or "null"] += 1
-
-        pay_rt = ((r.get("Pagamento__r") or {}).get("RecordType") or {}).get("Name") or (
-            "Unknown"
-        )
-        voo_tipo = vr.get("Tipo__c") or "Unknown"
-        b["by_payment_rt"][pay_rt] += rec if rec else emp
-        b["by_voo_tipo"][voo_tipo] += rec if rec else emp
-
-        art = account_rt_name(serv)
-        is_sub = pay_rt == "Voucher RevoSeats"
-        if "Jurídica" in art:
-            b["corporate_pj"] += rec
-            b["corporate_pj_pago"] += emp
-        elif "Física" in art or "pessoal" in art.lower():
-            b["consumer_pf"] += rec
-        if is_sub:
-            b["subscription_revo_seats"] += rec
-            b["subscription_revo_seats_pago"] += emp
-            b["subscription_n"] += 1
+        if "Jurídica" in account_rt_name(serv):
+            b["corporate_pj"] += emp
 
     monthly_out: dict[str, dict] = {}
     for m, b in monthly_r.items():
         valor_pago = sum(b["valor_pago_by_servico"].values())
-        rec = b["recognized"]
+        corp = b["corporate_pj"]
         monthly_out[m] = {
             "valor_pago": round(valor_pago, 2),
-            "recognized": round(rec, 2),
             "n": b["n"],
             "n_servicos": len(b["valor_pago_by_servico"]),
-            "corporate_pj": round(b["corporate_pj"], 2),
-            "corporate_pj_pct": round(b["corporate_pj"] / rec * 100, 2) if rec else 0.0,
-            "corporate_pj_pago": round(b["corporate_pj_pago"], 2),
-            "corporate_pj_pago_pct": round(
-                b["corporate_pj_pago"] / valor_pago * 100, 2
-            )
-            if valor_pago
-            else 0.0,
-            "consumer_pf": round(b["consumer_pf"], 2),
-            "subscription_revo_seats": round(b["subscription_revo_seats"], 2),
-            "subscription_pct": round(b["subscription_revo_seats"] / rec * 100, 2)
-            if rec
-            else 0.0,
-            "subscription_revo_seats_pago": round(b["subscription_revo_seats_pago"], 2),
-            "subscription_pago_pct": round(
-                b["subscription_revo_seats_pago"] / valor_pago * 100, 2
-            )
-            if valor_pago
-            else 0.0,
-            "subscription_n": b["subscription_n"],
-            "by_payment_rt": {
-                k: round(v, 2) for k, v in b["by_payment_rt"].items()
-            },
-            "by_voo_tipo": {k: round(v, 2) for k, v in b["by_voo_tipo"].items()},
-            "by_servico_status": dict(b["by_servico_status"]),
+            "corporate_pj": round(corp, 2),
+            "corporate_pj_pct": round(corp / valor_pago * 100, 2) if valor_pago else 0.0,
         }
 
-    # ltm_revenue helper expects nested monthly with same keys used in ltm_bucket
     payload = {
         "generated_from": f"Salesforce API {sf.sf_instance}",
         "hours": {
@@ -362,16 +276,9 @@ def main() -> None:
                     "Soma de Servico.ValorPago__c distintos por voo "
                     "(equivale a Empenho.ValorEmpenho__c); data = DiaVoo/DataHoraVoo"
                 ),
-                "recognized": (
-                    "Soma de Empenho.ValorReconhecimentoReceita__c "
-                    "(campo populado a partir de ~mar/2026)"
-                ),
                 "corporate_mobility": (
                     "Conta Faturamento (fallback Comprador) Record Type "
-                    "Cliente - Pessoa Jurídica"
-                ),
-                "subscription": (
-                    "Pagamento.RecordType = Voucher RevoSeats"
+                    "Cliente - Pessoa Jurídica / faturamento"
                 ),
             },
             "monthly": monthly_out,
