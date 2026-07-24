@@ -37,4 +37,4 @@ Outputs are written next to the script (gitignored): `index.html`, `data.js`, `r
 | Freq todo o período | Mesma distribuição em toda a base (jan/2024 → último dado), sem corte LTM |
 | Snapshots | Cortes fixos: `2026-06`, `2025-12`, `2024-12` |
 
-Excel: abas **Recorrência LTM**, **Freq LTM Mensal** e colunas extras em **Mensal**.
+Excel: abas **Glossário**, **Recorrência LTM**, **Freq LTM Mensal** e colunas extras em **Mensal**.

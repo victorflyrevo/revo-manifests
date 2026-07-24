@@ -147,6 +147,74 @@ FREQ_CAP = 20
 FREQ_KEYS = [f"ltm_freq_{i}" for i in range(1, FREQ_CAP + 1)] + ["ltm_freq_gt20"]
 FREQ_LABELS = [f"{i}×" for i in range(1, FREQ_CAP + 1)] + [f">{FREQ_CAP}"]
 
+# Shared glossary for HTML + Excel (term, definition)
+GLOSSARY = (
+    (
+        "Unique customers",
+        "Passageiros distintos na base (identidade consolidada). Conta cada pessoa uma vez no período considerado.",
+    ),
+    (
+        "Customers (boardings)",
+        "Total de embarques: cada vez que um passageiro aparece em um voo conta 1. Uma pessoa que voou 3 vezes = 3 customers/boardings.",
+    ),
+    (
+        "Unique mês",
+        "Passageiros distintos que voaram no mês civil (1º ao último dia do mês).",
+    ),
+    (
+        "LTM (Last Twelve Months)",
+        "Janela móvel de até 12 meses terminando no mês de referência (ex.: LTM de jun/2026 = jul/2025 → jun/2026).",
+    ),
+    (
+        "Unique LTM",
+        "Passageiros com pelo menos 1 boarding dentro da janela LTM.",
+    ),
+    (
+        "Frequência (1× … 20×, >20)",
+        "Quantos unique passageiros tiveram exatamente N boardings no recorte (LTM, mês-fim ou todo o período). >20 agrupa quem voou 21 vezes ou mais.",
+    ),
+    (
+        "≥2 / recorrentes",
+        "Passageiros com 2 ou mais boardings no recorte. É o corte principal de recorrência.",
+    ),
+    (
+        "≥4",
+        "Passageiros com 4 ou mais boardings no recorte — recorrência mais intensa.",
+    ),
+    (
+        "Δ vs −12m",
+        "Diferença absoluta entre o valor do LTM atual e o LTM que terminava no mesmo mês do ano anterior (ex.: jun/2026 vs jun/2025).",
+    ),
+    (
+        "Todo o período",
+        "Base completa disponível nos dados (em geral jan/2024 → último boarding), sem limitar a 12 meses.",
+    ),
+    (
+        "Snapshots",
+        "Cortes fixos de referência: Jun/2026, Dez/2025 e Dez/2024 — cada um com seu LTM.",
+    ),
+    (
+        "Novos clientes",
+        "Passageiros cuja primeira aparição na base cai naquele mês civil.",
+    ),
+    (
+        "Cumulativo unique",
+        "Soma progressiva de unique customers desde o início da base até o mês.",
+    ),
+    (
+        "Missão (Sigtrip)",
+        "Cadeia de pernas conectadas no mesmo dia / aeronave (corte operacional). Distinto de boarding de passageiro.",
+    ),
+    (
+        "Perna (leg)",
+        "Um trecho/voo individual no manifesto (origem → destino).",
+    ),
+    (
+        "SIAV→SIAV / cancelados",
+        "Treinos SIAV→SIAV e abas canceladas são excluídos das contagens deste dashboard.",
+    ),
+)
+
 
 def month_minus_years(label: str, years: int = 1) -> str:
     y, m = label.split("-")
@@ -602,6 +670,7 @@ def compute(
             "api_unique_unfiltered": summary.get("unique_passengers"),
         },
         "period_frequency": period_frequency,
+        "glossary": [{"term": t, "definition": d} for t, d in GLOSSARY],
         "snapshots": snapshots,
         "monthly": monthly,
         "top_routes": routes,
@@ -681,6 +750,22 @@ HTML = r'''<!DOCTYPE html>
     <p class="meta"><a href="./revo-customer-kpis.xlsx">Baixar Excel</a></p>
     <p class="alert" id="gapAlert" hidden></p>
   </header>
+
+  <section>
+    <h2>Glossário</h2>
+    <p class="help">Definições das métricas usadas neste dashboard.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Termo</th>
+            <th>Significado</th>
+          </tr>
+        </thead>
+        <tbody id="glossaryBody"></tbody>
+      </table>
+    </div>
+  </section>
 
   <section>
     <h2>Base total</h2>
@@ -848,11 +933,18 @@ const s = D.summary || {};
 const monthly = D.monthly || [];
 const snapshots = D.snapshots || [];
 const periodFreq = D.period_frequency || {};
+const glossary = D.glossary || [];
 const fmt = (v, suffix='%') => v == null ? '—' : `${v > 0 ? '+' : ''}${v}${suffix}`;
 const fmtN = (v) => v == null ? '—' : String(v);
 const fmtDelta = (v) => v == null ? '—' : `${v > 0 ? '+' : ''}${v}`;
 const cls = (v) => v == null ? 'na' : (v >= 0 ? 'pos' : 'neg');
 const pctOf = (n, den) => (!den || n == null) ? '—' : `${(n / den * 100).toFixed(1)}%`;
+
+document.getElementById('glossaryBody').innerHTML = glossary.map(g => `
+  <tr>
+    <td><strong>${g.term}</strong></td>
+    <td style="white-space:normal;max-width:52em">${g.definition}</td>
+  </tr>`).join('');
 
 const gaps = monthly.filter(r => r.data_gap);
 document.getElementById('quality').innerHTML = gaps.length
@@ -1064,8 +1156,22 @@ def write_excel(data: dict, path: Path) -> None:
     wb = Workbook()
     s = data["summary"]
 
-    ws_rec = wb.active
-    ws_rec.title = "Recorrência LTM"
+    ws_g = wb.active
+    ws_g.title = "Glossário"
+    ws_g["A1"] = "REVO · Glossário de métricas"
+    ws_g["A1"].font = Font(size=16, bold=True)
+    ws_g["A2"] = "Definições usadas no dashboard de recorrência / customer KPIs"
+    ws_g.cell(4, 1, "Termo")
+    ws_g.cell(4, 2, "Significado")
+    ws_g.cell(4, 1).font = Font(bold=True)
+    ws_g.cell(4, 2).font = Font(bold=True)
+    for r_i, (term, definition) in enumerate(GLOSSARY, 5):
+        ws_g.cell(r_i, 1, term)
+        ws_g.cell(r_i, 2, definition)
+    ws_g.column_dimensions["A"].width = 28
+    ws_g.column_dimensions["B"].width = 92
+
+    ws_rec = wb.create_sheet("Recorrência LTM")
     ws_rec["A1"] = "REVO · Recorrência LTM"
     ws_rec["A1"].font = Font(size=16, bold=True)
     ws_rec["A2"] = (
