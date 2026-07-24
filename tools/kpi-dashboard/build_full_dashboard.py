@@ -513,6 +513,22 @@ def compute(
         round(repeaters_window / uniques_window * 100, 1) if uniques_window else 0.0
     )
 
+    # Frequency over the entire available data period (not rolling LTM)
+    period_counts = {pid: len(dates) for pid, dates in pax_dates.items()}
+    period_freq = ltm_freq_metrics(period_counts)
+    period_frequency = {
+        "window_start": max(data_start, base_start).isoformat(),
+        "window_end": data_end.isoformat(),
+        "unique_customers": period_freq["ltm_unique_customers"],
+        "customers_boardings": boardings_window,
+        "ge2": period_freq["ltm_ge2"],
+        "ge4": period_freq["ltm_ge4"],
+        "ge2_pct": period_freq["ltm_ge2_pct"],
+        "ge4_pct": period_freq["ltm_ge4_pct"],
+        **{k: period_freq[k] for k in FREQ_KEYS},
+        "freq_rows": period_freq["ltm_freq_rows"],
+    }
+
     # LTM missions (ending at latest active month) — by mission date
     ltm_mission_total = 0
     if preferred_latest:
@@ -541,6 +557,12 @@ def compute(
             "ltm_missions": ltm_mission_total,
             "recurring_all_time": repeaters_window,
             "recurrence_rate_all_time": recurrence_window,
+            "period_ge2": period_frequency["ge2"],
+            "period_ge4": period_frequency["ge4"],
+            "period_ge2_pct": period_frequency["ge2_pct"],
+            "period_ge4_pct": period_frequency["ge4_pct"],
+            "period_window_start": period_frequency["window_start"],
+            "period_window_end": period_frequency["window_end"],
             "cumulative_unique_end": last["cumulative_unique_customers"],
             "latest_month": preferred_latest["month"],
             "latest_mom_cumulative_pct": last["mom_cumulative_pct"],
@@ -579,6 +601,7 @@ def compute(
             "yoy_months_available": len(yoy_points),
             "api_unique_unfiltered": summary.get("unique_passengers"),
         },
+        "period_frequency": period_frequency,
         "snapshots": snapshots,
         "monthly": monthly,
         "top_routes": routes,
@@ -678,6 +701,24 @@ HTML = r'''<!DOCTYPE html>
       <table>
         <thead id="freqMonthHead"></thead>
         <tbody id="freqMonthBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Frequência · todo o período</h2>
+    <p class="help" id="periodFreqHelp">Distribuição 1× … 20× e &gt;20 em toda a base disponível (não é LTM).</p>
+    <div class="kpis" id="periodKpis"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Frequência</th>
+            <th class="num">Passageiros</th>
+            <th class="num">% dos unique</th>
+          </tr>
+        </thead>
+        <tbody id="periodFreqBody"></tbody>
       </table>
     </div>
   </section>
@@ -806,6 +847,7 @@ const D = window.KPI_DATA || {};
 const s = D.summary || {};
 const monthly = D.monthly || [];
 const snapshots = D.snapshots || [];
+const periodFreq = D.period_frequency || {};
 const fmt = (v, suffix='%') => v == null ? '—' : `${v > 0 ? '+' : ''}${v}${suffix}`;
 const fmtN = (v) => v == null ? '—' : String(v);
 const fmtDelta = (v) => v == null ? '—' : `${v > 0 ? '+' : ''}${v}`;
@@ -843,6 +885,21 @@ document.getElementById('recKpis').innerHTML = [
   ['Recorrentes ≥2', s.ltm_ge2, `há 12m: ${fmtN(s.prev_ltm_ge2)} · hoje ${fmtDelta(s.ltm_ge2_delta_vs_12m)} · ${s.ltm_ge2_pct ?? '—'}%`],
   ['Recorrentes ≥4', s.ltm_ge4, `há 12m: ${fmtN(s.prev_ltm_ge4)} · hoje ${fmtDelta(s.ltm_ge4_delta_vs_12m)} · ${s.ltm_ge4_pct ?? '—'}%`],
 ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${fmtN(v)}</strong><span class="sub">${sub || ''}</span></article>`).join('');
+
+const periodRows = periodFreq.freq_rows || [];
+document.getElementById('periodFreqHelp').textContent =
+  `Distribuição 1× … 20× e >20 em toda a base (${periodFreq.window_start || D.data_start || '—'} → ${periodFreq.window_end || D.data_end || '—'}). Não é LTM.`;
+document.getElementById('periodKpis').innerHTML = [
+  ['Unique (período)', periodFreq.unique_customers, `customers ${fmtN(periodFreq.customers_boardings)}`],
+  ['≥2 no período', periodFreq.ge2, `${periodFreq.ge2_pct ?? '—'}%`],
+  ['≥4 no período', periodFreq.ge4, `${periodFreq.ge4_pct ?? '—'}%`],
+].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${fmtN(v)}</strong><span class="sub">${sub || ''}</span></article>`).join('');
+document.getElementById('periodFreqBody').innerHTML = periodRows.map(r => `
+  <tr>
+    <td>${r.label}</td>
+    <td class="num">${fmtN(r.count)}</td>
+    <td class="num">${pctOf(r.count, periodFreq.unique_customers)}</td>
+  </tr>`).join('');
 
 const freqRows = s.ltm_freq_rows || [];
 const freqKeys = freqRows.map(r => r.key);
@@ -1036,13 +1093,39 @@ def write_excel(data: dict, path: Path) -> None:
         ws_rec.cell(5, 1 + i, lab)
         ws_rec.cell(6, 1 + i, val if val is not None else "—")
 
-    ws_rec["A8"] = "Distribuição por frequência (LTM atual · 1× … 20× e >20)"
+    period = data.get("period_frequency") or {}
+    period_rows = period.get("freq_rows") or []
+    ws_rec["A8"] = (
+        f"Frequência · todo o período "
+        f"({period.get('window_start') or data.get('data_start')} → "
+        f"{period.get('window_end') or data.get('data_end')})"
+    )
     ws_rec["A8"].font = Font(bold=True)
+    ws_rec["A9"] = (
+        f"Unique {period.get('unique_customers')} · Customers {period.get('customers_boardings')} · "
+        f"≥2 {period.get('ge2')} ({period.get('ge2_pct')}%) · ≥4 {period.get('ge4')} ({period.get('ge4_pct')}%)"
+    )
+    for i, h in enumerate(["Frequência", "Passageiros", "% dos unique"], 1):
+        ws_rec.cell(10, i, h)
+    unique_period = period.get("unique_customers") or 0
+    for r_i, row in enumerate(period_rows, 11):
+        n = row.get("count")
+        ws_rec.cell(r_i, 1, row.get("label"))
+        ws_rec.cell(r_i, 2, n if n is not None else "—")
+        if n is not None and unique_period:
+            ws_rec.cell(r_i, 3, round(n / unique_period * 100, 1))
+        else:
+            ws_rec.cell(r_i, 3, "—")
+
+    ltm_title_row = 11 + len(period_rows) + 1
+    ws_rec.cell(ltm_title_row, 1, "Distribuição por frequência (LTM atual · 1× … 20× e >20)")
+    ws_rec.cell(ltm_title_row, 1).font = Font(bold=True)
     for i, h in enumerate(["Frequência", "Passageiros", "% do LTM"], 1):
-        ws_rec.cell(9, i, h)
+        ws_rec.cell(ltm_title_row + 1, i, h)
     unique_ltm = s.get("ltm_unique_customers") or 0
     freq_rows = s.get("ltm_freq_rows") or freq_rows_from_fields(s)
-    for r_i, row in enumerate(freq_rows, 10):
+    ltm_data_start = ltm_title_row + 2
+    for r_i, row in enumerate(freq_rows, ltm_data_start):
         n = row.get("count")
         ws_rec.cell(r_i, 1, row.get("label"))
         ws_rec.cell(r_i, 2, n if n is not None else "—")
@@ -1051,7 +1134,7 @@ def write_excel(data: dict, path: Path) -> None:
         else:
             ws_rec.cell(r_i, 3, "—")
 
-    snap_start = 10 + len(freq_rows) + 2
+    snap_start = ltm_data_start + len(freq_rows) + 2
     ws_rec.cell(snap_start, 1, "Snapshots (Jun/2026 · Dez/2025 · Dez/2024)")
     ws_rec.cell(snap_start, 1).font = Font(bold=True)
     snap_headers = [
@@ -1257,6 +1340,10 @@ def main() -> None:
             "freq": {
                 row["label"]: row["count"]
                 for row in (data["summary"].get("ltm_freq_rows") or [])
+            },
+            "period_freq": {
+                row["label"]: row["count"]
+                for row in ((data.get("period_frequency") or {}).get("freq_rows") or [])
             },
         },
     )

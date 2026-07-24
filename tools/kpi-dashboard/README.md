@@ -34,6 +34,7 @@ Outputs are written next to the script (gitignored): `index.html`, `data.js`, `r
 | ≥2 / ≥4 | Passageiros com 2+ / 4+ boardings na mesma janela |
 | Δ vs −12m | Diferença absoluta vs o LTM que terminava no mesmo mês do ano anterior |
 | Freq LTM mensal | Distribuição 1×…20× / >20 para cada mês-fim de janela |
+| Freq todo o período | Mesma distribuição em toda a base (jan/2024 → último dado), sem corte LTM |
 | Snapshots | Cortes fixos: `2026-06`, `2025-12`, `2024-12` |
 
 Excel: abas **Recorrência LTM**, **Freq LTM Mensal** e colunas extras em **Mensal**.
