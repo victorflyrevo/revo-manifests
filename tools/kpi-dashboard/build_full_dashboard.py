@@ -320,11 +320,19 @@ def compute(
             unique_m = len(active)
 
         has_activity = boardings_m > 0
-        # Known ingest gaps / thin months (re-check after each API refresh)
+        # Known ingest gaps / thin months (re-check after each API refresh).
+        # Only flag a month when the note still matches reality (e.g. empty June).
         KNOWN_GAPS = {
-            "2026-06": "Mai-Jun_2026 incompleto na API (sem boardings em junho)",
+            "2026-06": (
+                "Mai-Jun_2026 incompleto na API (sem boardings em junho)",
+                lambda n: n == 0,
+            ),
         }
-        data_gap = KNOWN_GAPS.get(label)
+        data_gap = None
+        if label in KNOWN_GAPS:
+            note, still_broken = KNOWN_GAPS[label]
+            if still_broken(boardings_m):
+                data_gap = note
         if has_activity and boardings_m < 20:
             data_gap = (data_gap + " · " if data_gap else "") + f"mês com poucos boardings ({boardings_m})"
 
