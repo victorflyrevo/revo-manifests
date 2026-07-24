@@ -28,9 +28,12 @@ Outputs are written next to the script (gitignored): `index.html`, `data.js`, `r
 
 | Campo | Significado |
 |---|---|
+| Unique customers | Passageiros distintos na base (jan/2024 → hoje) |
+| Customers | Boardings (cada embarque conta) |
 | Unique LTM | Passageiros com ≥1 boarding na janela de até 12 meses |
 | ≥2 / ≥4 | Passageiros com 2+ / 4+ boardings na mesma janela |
 | Δ vs −12m | Diferença absoluta vs o LTM que terminava no mesmo mês do ano anterior |
+| Freq LTM mensal | Distribuição 1×…20× / >20 para cada mês-fim de janela |
 | Snapshots | Cortes fixos: `2026-06`, `2025-12`, `2024-12` |
 
-Excel: aba **Recorrência LTM** (headline + distribuição + snapshots) e colunas extras na aba **Mensal**.
+Excel: abas **Recorrência LTM**, **Freq LTM Mensal** e colunas extras em **Mensal**.

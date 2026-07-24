@@ -660,9 +660,26 @@ HTML = r'''<!DOCTYPE html>
   </header>
 
   <section>
+    <h2>Base total</h2>
+    <p class="help">Unique customers = passageiros distintos. Customers = boardings (cada embarque conta).</p>
+    <div class="kpis" id="baseKpis"></div>
+  </section>
+
+  <section>
     <h2>Recorrência LTM</h2>
     <p class="help" id="ltmHelp"></p>
     <div class="kpis" id="recKpis"></div>
+  </section>
+
+  <section>
+    <h2>Frequência LTM · mês a mês</h2>
+    <p class="help">Para cada mês-fim, distribuição do LTM (até 12 meses) em 1× … 20× e &gt;20, com unique LTM e customers (boardings) do mês civil.</p>
+    <div class="table-wrap">
+      <table>
+        <thead id="freqMonthHead"></thead>
+        <tbody id="freqMonthBody"></tbody>
+      </table>
+    </div>
   </section>
 
   <section>
@@ -767,8 +784,8 @@ HTML = r'''<!DOCTYPE html>
             <th>Mês</th>
             <th class="num">Novos</th>
             <th class="num">Cumulativo</th>
-            <th class="num">Unique</th>
-            <th class="num">Boardings</th>
+            <th class="num">Unique mês</th>
+            <th class="num">Customers</th>
             <th class="num">LTM unique</th>
             <th class="num">LTM ≥2</th>
             <th class="num">Δ ≥2</th>
@@ -815,6 +832,12 @@ const winLabel = (s.ltm_window_start && s.ltm_window_end)
 document.getElementById('ltmHelp').textContent =
   `Janela LTM atual (${s.latest_month || '—'}): ${winLabel}. Comparado ao LTM que terminava em ${s.ltm_vs_month || '—'}.`;
 
+document.getElementById('baseKpis').innerHTML = [
+  ['Unique customers', s.unique_customers_all_time, `base ${D.base_start || 'jan/2024'} → ${D.data_end || '—'} · cumulativo ${fmtN(s.cumulative_unique_end)}`],
+  ['Customers (boardings)', s.total_boardings, `cada embarque conta · missões ${fmtN(s.total_missions ?? s.total_flights)}`],
+  ['Unique LTM', s.ltm_unique_customers, `janela ${winLabel}`],
+].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${fmtN(v)}</strong><span class="sub">${sub || ''}</span></article>`).join('');
+
 document.getElementById('recKpis').innerHTML = [
   ['Unique LTM', s.ltm_unique_customers, `Δ ${fmtDelta(s.ltm_unique_delta_vs_12m)} vs ${s.ltm_vs_month || '—'}`],
   ['Recorrentes ≥2', s.ltm_ge2, `há 12m: ${fmtN(s.prev_ltm_ge2)} · hoje ${fmtDelta(s.ltm_ge2_delta_vs_12m)} · ${s.ltm_ge2_pct ?? '—'}%`],
@@ -822,6 +845,27 @@ document.getElementById('recKpis').innerHTML = [
 ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${fmtN(v)}</strong><span class="sub">${sub || ''}</span></article>`).join('');
 
 const freqRows = s.ltm_freq_rows || [];
+const freqKeys = freqRows.map(r => r.key);
+document.getElementById('freqMonthHead').innerHTML = `<tr>
+  <th>Mês</th>
+  <th class="num">Unique mês</th>
+  <th class="num">Customers</th>
+  <th class="num">Unique LTM</th>
+  <th class="num">≥2</th>
+  <th class="num">≥4</th>
+  ${freqRows.map(r => `<th class="num">${r.label}</th>`).join('')}
+</tr>`;
+document.getElementById('freqMonthBody').innerHTML = monthly.map(r => `
+  <tr>
+    <td>${r.month}${r.data_gap ? ' ⚠' : (r.has_activity ? '' : ' <span class="na">(vazio)</span>')}</td>
+    <td class="num">${fmtN(r.unique_passengers)}</td>
+    <td class="num">${fmtN(r.boardings)}</td>
+    <td class="num">${fmtN(r.ltm_unique_customers)}</td>
+    <td class="num">${fmtN(r.ltm_ge2)}</td>
+    <td class="num">${fmtN(r.ltm_ge4)}</td>
+    ${freqKeys.map(k => `<td class="num">${fmtN(r[k])}</td>`).join('')}
+  </tr>`).join('');
+
 document.getElementById('freqBody').innerHTML = freqRows.map(r => `
   <tr>
     <td>${r.label}</td>
@@ -861,12 +905,12 @@ document.getElementById('freqSnapBody').innerHTML = freqTemplate.map((row, idx) 
   </tr>`).join('');
 
 document.getElementById('kpis').innerHTML = [
-  ['Unique (base jan/24)', s.unique_customers_all_time, `${s.total_boardings || 0} boardings`],
+  ['Unique customers', s.unique_customers_all_time, `customers ${fmtN(s.total_boardings)}`],
   ['Missões (corte Sigtrip)', s.total_missions ?? s.total_flights, `${s.total_flight_legs || '—'} pernas · LTM ${s.ltm_missions ?? '—'}`],
   ['Cumulativo final', s.cumulative_unique_end, `até ${s.latest_month || '—'}`],
   ['MoM cumulativo', fmt(s.latest_mom_cumulative_pct), `último mês ${s.latest_month || '—'}`],
   ['YoY cumulativo', fmt(s.latest_yoy_cumulative_pct), s.yoy_months_available ? `${s.yoy_months_available} meses com YoY` : 'sem par YoY ainda'],
-  ['LTM ≥2 / ≥4', `${fmtN(s.ltm_ge2)} / ${fmtN(s.ltm_ge4)}`, `unique ${fmtN(s.ltm_unique_customers)}`],
+  ['LTM ≥2 / ≥4', `${fmtN(s.ltm_ge2)} / ${fmtN(s.ltm_ge4)}`, `unique LTM ${fmtN(s.ltm_unique_customers)}`],
 ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v ?? '—'}</strong><span class="sub">${sub || ''}</span></article>`).join('');
 
 document.getElementById('tbody').innerHTML = monthly.map(r => `
@@ -975,6 +1019,8 @@ def write_excel(data: dict, path: Path) -> None:
         ws_rec["A3"] = f"Alerta: {s['latest_month']} — {s['latest_data_gap']}"
 
     headline = [
+        ("Unique customers", s.get("unique_customers_all_time")),
+        ("Customers (boardings)", s.get("total_boardings")),
         ("Unique LTM", s.get("ltm_unique_customers")),
         ("Δ unique vs −12m", s.get("ltm_unique_delta_vs_12m")),
         ("≥2 LTM", s.get("ltm_ge2")),
@@ -1047,6 +1093,32 @@ def write_excel(data: dict, path: Path) -> None:
             n = snap.get(row.get("key"))
             ws_rec.cell(r_i, c, n if n is not None else "—")
 
+    ws_fm = wb.create_sheet("Freq LTM Mensal")
+    ws_fm["A1"] = "Frequência LTM · mês a mês (1× … 20× e >20)"
+    ws_fm["A1"].font = Font(size=14, bold=True)
+    ws_fm["A2"] = (
+        "Unique mês = passageiros distintos no mês civil · "
+        "Customers = boardings do mês · Unique LTM / faixas = janela rolling até 12m"
+    )
+    fm_headers = [
+        "Mês", "Unique mês", "Customers", "Unique LTM", "≥2", "≥4", "≥2 %", "≥4 %",
+    ] + FREQ_LABELS
+    for i, h in enumerate(fm_headers, 1):
+        ws_fm.cell(4, i, h)
+    for r_i, r in enumerate(data["monthly"], 5):
+        vals = [
+            r["month"],
+            r["unique_passengers"],
+            r["boardings"],
+            r["ltm_unique_customers"],
+            r["ltm_ge2"],
+            r["ltm_ge4"],
+            r["ltm_ge2_pct"],
+            r["ltm_ge4_pct"],
+        ] + [r.get(k) for k in FREQ_KEYS]
+        for c, v in enumerate(vals, 1):
+            ws_fm.cell(r_i, c, v if v is not None else None)
+
     ws = wb.create_sheet("Resumo")
     ws["A1"] = "REVO · Customer growth MoM / YoY"
     ws["A1"].font = Font(size=16, bold=True)
@@ -1055,11 +1127,12 @@ def write_excel(data: dict, path: Path) -> None:
         f"→ {data['data_end']} · {data['months_available']} meses"
     )
     cards = [
-        ("Unique (base jan/24)", s.get("unique_customers_all_time")),
-        ("Cumulativo final", s.get("cumulative_unique_end")),
+        ("Unique customers", s.get("unique_customers_all_time")),
+        ("Customers (boardings)", s.get("total_boardings")),
+        ("Cumulativo unique", s.get("cumulative_unique_end")),
+        ("Unique LTM", s.get("ltm_unique_customers")),
         ("MoM cumulativo %", s.get("latest_mom_cumulative_pct")),
         ("YoY cumulativo %", s.get("latest_yoy_cumulative_pct")),
-        ("Boardings", s.get("total_boardings")),
         ("Missões (Sigtrip)", s.get("total_missions") or s.get("total_flights")),
         ("Pernas (legs)", s.get("total_flight_legs")),
         ("Missões LTM", s.get("ltm_missions")),
@@ -1072,7 +1145,7 @@ def write_excel(data: dict, path: Path) -> None:
 
     ws_m = wb.create_sheet("Mensal")
     headers = [
-        "Mês", "Novos", "Cumulativo", "Unique", "Boardings", "Missões",
+        "Mês", "Novos", "Cumulativo unique", "Unique mês", "Customers", "Missões",
         "MoM cumulativo %", "YoY cumulativo %",
         "LTM unique", "LTM ≥2", "Δ ≥2 vs −12m", "LTM ≥4", "Δ ≥4 vs −12m",
         "≥2 %", "≥4 %",
