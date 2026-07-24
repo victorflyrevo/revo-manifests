@@ -12,6 +12,12 @@ Flight counts use the **Sigtrip mission cut** (`app.missions`): connected same-d
 # tools/kpi-dashboard/.env.local
 MANIFESTS_API_BASE=https://web-production-9b4c2.up.railway.app
 API_KEY=…
+
+# Optional — Salesforce hours + recognized revenue
+SF_DOMAIN=login
+SF_USERNAME=…
+SF_PASSWORD=…
+SF_TOKEN=…
 ```
 
 ## Build
@@ -19,10 +25,13 @@ API_KEY=…
 From repo root (or this folder):
 
 ```bash
+# optional Salesforce pull (needs simple-salesforce + SF_* env)
+python3 tools/kpi-dashboard/pull_salesforce_kpis.py
+
 python3 tools/kpi-dashboard/build_full_dashboard.py
 ```
 
-Outputs are written next to the script (gitignored): `index.html`, `data.js`, `revo-customer-kpis.xlsx`.
+Outputs are written next to the script (gitignored): `index.html`, `data.js`, `revo-customer-kpis.xlsx`, `salesforce_kpis.json`.
 
 ## Recorrência LTM
 
@@ -37,4 +46,9 @@ Outputs are written next to the script (gitignored): `index.html`, `data.js`, `r
 | Freq todo o período | Mesma distribuição em toda a base (jan/2024 → último dado), sem corte LTM |
 | Snapshots | Cortes fixos: `2026-06`, `2025-12`, `2024-12` |
 
-Excel: abas **Glossário**, **Recorrência LTM**, **Freq LTM Mensal** e colunas extras em **Mensal**.
+| Horas SBGR / Resto / Shuttle | Salesforce `TempoMissao__c` (min÷60), voos Executado |
+| Faturamento reconhecido | Opportunities `StageName=Pago` |
+| Corporate mobility % | Conta Pessoa Jurídica / reconhecido |
+| Subscription | Opportunity Record Type = Revo Seats |
+
+Excel: abas **Glossário**, **Horas SBGR**, **Faturamento SF**, **Recorrência LTM**, **Freq LTM Mensal**, **Mensal**.
