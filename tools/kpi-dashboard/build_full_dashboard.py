@@ -236,9 +236,19 @@ GLOSSARY = (
         "é Cliente - Pessoa Jurídica.",
     ),
     (
-        "Subscription %",
-        "% do faturamento mensal vindo de subscription used "
-        "(rcm-used.xlsx · linha Total Used per month).",
+        "Revo Seats (subscription)",
+        "Produto de assinatura / pacote de assentos. A utilização reconhecida "
+        "mês a mês vem da planilha rcm-used (desde abr/2025).",
+    ),
+    (
+        "Revo Seats used",
+        "Receita de subscription utilizada no mês — linha 33 "
+        "'Total Used per month' do rcm-used.xlsx (BRL).",
+    ),
+    (
+        "Subscription % do faturamento",
+        "Revo Seats used ÷ faturamento do mesmo mês. "
+        "Mede quanto da receita mensal veio de subscription.",
     ),
 )
 
@@ -801,12 +811,16 @@ HTML = r'''<!DOCTYPE html>
   </section>
 
   <section id="sfRevenueSection" hidden>
-    <h2>Base de vendas · corporate · subscription</h2>
-    <p class="help" id="sfRevenueHelp">Evolução do faturamento (mês do voo), % corporate mobility (PJ) e % subscription used (rcm-used).</p>
+    <h2>Base de vendas · corporate · Revo Seats</h2>
+    <p class="help" id="sfRevenueHelp">Faturamento (mês do voo), corporate mobility % e Revo Seats used desde 2025 (rcm-used).</p>
     <div class="kpis" id="sfRevenueKpis"></div>
     <div class="charts" style="margin:14px 0">
       <div class="box"><h3>Evolução da base de vendas</h3><canvas id="chartSales" height="240"></canvas></div>
       <div class="box"><h3>% do faturamento</h3><canvas id="chartMix" height="240"></canvas></div>
+    </div>
+    <div class="charts" style="margin:14px 0">
+      <div class="box"><h3>Revo Seats used · desde 2025</h3><canvas id="chartSeats" height="240"></canvas></div>
+      <div class="box"><h3>Revo Seats used cumulativo</h3><canvas id="chartSeatsCum" height="240"></canvas></div>
     </div>
     <div class="table-wrap">
       <table>
@@ -815,8 +829,9 @@ HTML = r'''<!DOCTYPE html>
             <th>Mês</th>
             <th class="num">Faturamento</th>
             <th class="num">Corporate %</th>
-            <th class="num">Subscription used</th>
+            <th class="num">Revo Seats used</th>
             <th class="num">Subscription %</th>
+            <th class="num">Seats cumulativo</th>
           </tr>
         </thead>
         <tbody id="sfRevMonthBody"></tbody>
@@ -1055,23 +1070,34 @@ if (sf && sf.hours) {
 if (sf && sf.revenue) {
   document.getElementById('sfRevenueSection').hidden = false;
   const rev = sf.revenue;
+  const seats = sf.revo_seats || {};
   const snap = rev.snapshots?.ltm_2026_06 || {};
   document.getElementById('sfRevenueKpis').innerHTML = [
     ['Faturamento LTM Jun/2026', fmtBRL(snap.valor_pago), 'base de vendas · mês do voo'],
     ['Corporate mobility', `${snap.corporate_pj_pct ?? '—'}%`, fmtBRL(snap.corporate_pj) + ' do faturamento LTM'],
-    ['Subscription', `${snap.subscription_pct ?? '—'}%`, fmtBRL(snap.subscription_used) + ' used / faturamento LTM'],
+    ['Revo Seats LTM', `${snap.subscription_pct ?? '—'}%`, fmtBRL(snap.subscription_used) + ' used / faturamento LTM'],
+    ['Revo Seats desde 2025', fmtBRL(seats.total_used), `${seats.first_month || '—'} → ${seats.last_month || '—'}`],
   ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v}</strong><span class="sub">${sub||''}</span></article>`).join('');
-  const rm = Object.keys(rev.monthly || {}).sort();
+  const seatMonthly = seats.monthly || {};
+  const rm = Object.keys({...(rev.monthly || {}), ...seatMonthly})
+    .filter(m => m >= '2025-01')
+    .sort();
+  let cum = 0;
   const salesRows = rm.map(m => {
-    const r = rev.monthly[m];
-    return {
+    const r = rev.monthly?.[m] || {};
+    const used = r.subscription_used ?? seatMonthly[m]?.used ?? 0;
+    cum += Number(used || 0);
+    const fat = r.valor_pago || 0;
+    const has = (fat > 0) || (used > 0);
+    return has ? {
       m,
-      fat: r.valor_pago,
+      fat,
       corpPct: r.corporate_pj_pct,
-      sub: r.subscription_used,
+      sub: used,
       subPct: r.subscription_pct,
-    };
-  });
+      cum,
+    } : null;
+  }).filter(Boolean);
   document.getElementById('sfRevMonthBody').innerHTML = salesRows.map(r => `
     <tr>
       <td>${r.m}</td>
@@ -1079,6 +1105,7 @@ if (sf && sf.revenue) {
       <td class="num">${r.corpPct ?? '—'}%</td>
       <td class="num">${fmtBRL(r.sub)}</td>
       <td class="num">${r.subPct ?? '—'}%</td>
+      <td class="num">${fmtBRL(r.cum)}</td>
     </tr>`).join('');
   window.__salesRows = salesRows;
 }
@@ -1282,23 +1309,35 @@ line('chartNew', [{
 
 if (window.__salesRows && window.__salesRows.length) {
   const sr = window.__salesRows;
+  const withFat = sr.filter(r => r.fat > 0);
   line('chartSales', [{
     label: 'Faturamento',
-    data: sr.map(r => r.fat),
+    data: withFat.map(r => r.fat),
     borderColor: '#0b6b52', backgroundColor: 'rgba(11,107,82,0.12)', fill: true, tension: 0.25, pointRadius: 3,
-  }], { labels: sr.map(r => r.m), beginAtZero: true, legend: false });
+  }], { labels: withFat.map(r => r.m), beginAtZero: true, legend: false });
   line('chartMix', [
     {
       label: 'Corporate %',
-      data: sr.map(r => r.corpPct),
+      data: withFat.map(r => r.corpPct),
       borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.08)', fill: false, tension: 0.25, pointRadius: 3,
     },
     {
       label: 'Subscription %',
-      data: sr.map(r => r.subPct),
+      data: withFat.map(r => r.subPct),
       borderColor: '#2f5d9f', backgroundColor: 'rgba(47,93,159,0.08)', fill: false, tension: 0.25, pointRadius: 3,
     },
-  ], { labels: sr.map(r => r.m), pct: true, beginAtZero: true, legend: true });
+  ], { labels: withFat.map(r => r.m), pct: true, beginAtZero: true, legend: true });
+  const withSeats = sr.filter(r => r.sub > 0 || r.m >= '2025-04');
+  line('chartSeats', [{
+    label: 'Revo Seats used',
+    data: withSeats.map(r => r.sub),
+    borderColor: '#2f5d9f', backgroundColor: 'rgba(47,93,159,0.12)', fill: true, tension: 0.25, pointRadius: 3,
+  }], { labels: withSeats.map(r => r.m), beginAtZero: true, legend: false });
+  line('chartSeatsCum', [{
+    label: 'Cumulativo',
+    data: withSeats.map(r => r.cum),
+    borderColor: '#0b6b52', backgroundColor: 'rgba(11,107,82,0.12)', fill: true, tension: 0.25, pointRadius: 3,
+  }], { labels: withSeats.map(r => r.m), beginAtZero: true, legend: false });
 }
 </script>
 </body>
@@ -1352,14 +1391,15 @@ def load_rcm_used() -> dict[str, float]:
 
 
 def merge_subscription_used(sf: dict, rcm: dict[str, float]) -> dict:
-    """Attach subscription used + % of monthly faturamento into revenue payload."""
-    rev = sf.get("revenue")
-    if not rev:
-        return sf
-    monthly = rev.get("monthly") or {}
-    # Ensure months that only exist in RCM still appear when we have faturamento later
-    for m, used in rcm.items():
-        if m not in monthly and used:
+    """Attach Revo Seats used (since 2025) + % of monthly faturamento."""
+    rev = sf.get("revenue") or {}
+    monthly = dict(rev.get("monthly") or {})
+
+    seats_monthly: dict[str, dict] = {}
+    cumulative = 0.0
+    for m in sorted(k for k in rcm if k >= "2025-01"):
+        used_amt = float(rcm.get(m) or 0)
+        if m not in monthly:
             monthly[m] = {
                 "valor_pago": 0.0,
                 "n": 0,
@@ -1367,14 +1407,22 @@ def merge_subscription_used(sf: dict, rcm: dict[str, float]) -> dict:
                 "corporate_pj": 0.0,
                 "corporate_pj_pct": 0.0,
             }
-        if m not in monthly:
-            continue
         fat = float(monthly[m].get("valor_pago") or 0)
-        used_amt = float(used or 0)
         monthly[m]["subscription_used"] = round(used_amt, 2)
         monthly[m]["subscription_pct"] = (
             round(used_amt / fat * 100, 2) if fat else None
         )
+        cumulative += used_amt
+        seats_monthly[m] = {
+            "used": round(used_amt, 2),
+            "cumulative": round(cumulative, 2),
+            "faturamento": round(fat, 2),
+            "pct_of_faturamento": (
+                round(used_amt / fat * 100, 2) if fat else None
+            ),
+        }
+
+    active_seats = [m for m, b in seats_monthly.items() if b["used"] > 0]
 
     def ltm_sub(end: str, months: int = 12) -> dict:
         y, mo = map(int, end.split("-"))
@@ -1406,7 +1454,8 @@ def merge_subscription_used(sf: dict, rcm: dict[str, float]) -> dict:
     rev["monthly"] = monthly
     rev.setdefault("definition", {})
     rev["definition"]["subscription"] = (
-        "rcm-used.xlsx linha 33 'Total Used per month' / faturamento do mês"
+        "Revo Seats used (rcm-used.xlsx linha 33 'Total Used per month', "
+        "desde 2025) / faturamento do mês"
     )
     rev["snapshots"] = {
         "ltm_2026_06": ltm_sub("2026-06"),
@@ -1414,6 +1463,15 @@ def merge_subscription_used(sf: dict, rcm: dict[str, float]) -> dict:
         "ltm_2024_12": ltm_sub("2024-12"),
     }
     sf["revenue"] = rev
+    sf["revo_seats"] = {
+        "source": "rcm-used.xlsx · Total Used per month (linha 33)",
+        "unit": "BRL",
+        "first_month": active_seats[0] if active_seats else None,
+        "last_month": active_seats[-1] if active_seats else None,
+        "total_used": round(cumulative, 2),
+        "months_with_usage": len(active_seats),
+        "monthly": seats_monthly,
+    }
     return sf
 
 
@@ -1488,14 +1546,16 @@ def write_excel(data: dict, path: Path) -> None:
 
     if sf.get("revenue"):
         ws_rv = wb.create_sheet("Base de vendas")
-        ws_rv["A1"] = "Base de vendas · corporate · subscription"
+        ws_rv["A1"] = "Base de vendas · corporate · Revo Seats"
         ws_rv["A1"].font = Font(size=14, bold=True)
         ws_rv["A2"] = (
             "Faturamento = Servico.ValorPago no mês do voo · "
             "Corporate % = Conta Faturamento PJ / faturamento · "
-            "Subscription % = rcm-used Total Used / faturamento"
+            "Revo Seats used = rcm-used Total Used (desde 2025) · "
+            "Subscription % = Seats used / faturamento"
         )
         snap = (sf["revenue"].get("snapshots") or {}).get("ltm_2026_06") or {}
+        seats = sf.get("revo_seats") or {}
         ws_rv["A4"] = "LTM Jun/2026"
         ws_rv["A4"].font = Font(bold=True)
         ws_rv["A5"] = "Faturamento"
@@ -1503,30 +1563,75 @@ def write_excel(data: dict, path: Path) -> None:
         ws_rv["A6"] = "Corporate mobility %"
         ws_rv["B6"] = snap.get("corporate_pj_pct")
         ws_rv["C6"] = snap.get("corporate_pj")
-        ws_rv["A7"] = "Subscription %"
+        ws_rv["A7"] = "Revo Seats % (LTM)"
         ws_rv["B7"] = snap.get("subscription_pct")
         ws_rv["C7"] = snap.get("subscription_used")
-        ws_rv["A9"] = "Mensal"
-        ws_rv["A9"].font = Font(bold=True)
+        ws_rv["A8"] = "Revo Seats total desde 2025"
+        ws_rv["B8"] = seats.get("total_used")
+        ws_rv["C8"] = f"{seats.get('first_month')} → {seats.get('last_month')}"
+        ws_rv["A10"] = "Mensal (desde 2025)"
+        ws_rv["A10"].font = Font(bold=True)
         for i, h in enumerate(
             [
                 "Mês", "Faturamento", "Corporate %",
-                "Subscription used", "Subscription %",
+                "Revo Seats used", "Subscription %", "Seats cumulativo",
             ],
             1,
         ):
-            ws_rv.cell(10, i, h)
-        for r_i, m in enumerate(sorted((sf["revenue"].get("monthly") or {})), 11):
+            ws_rv.cell(11, i, h)
+        cum = 0.0
+        row_i = 12
+        for m in sorted(
+            k for k in (sf["revenue"].get("monthly") or {}) if k >= "2025-01"
+        ):
             r = sf["revenue"]["monthly"][m]
+            used = float(r.get("subscription_used") or 0)
+            fat = float(r.get("valor_pago") or 0)
+            if fat <= 0 and used <= 0:
+                continue
+            cum += used
             vals = [
                 m,
                 r.get("valor_pago"),
                 r.get("corporate_pj_pct"),
-                r.get("subscription_used"),
+                used,
                 r.get("subscription_pct"),
+                round(cum, 2),
             ]
             for c, v in enumerate(vals, 1):
-                ws_rv.cell(r_i, c, v if v is not None else None)
+                ws_rv.cell(row_i, c, v if v is not None else None)
+            row_i += 1
+
+        ws_rs = wb.create_sheet("Revo Seats")
+        ws_rs["A1"] = "Revo Seats used · desde 2025"
+        ws_rs["A1"].font = Font(size=14, bold=True)
+        ws_rs["A2"] = seats.get("source") or "rcm-used.xlsx"
+        ws_rs["A3"] = (
+            f"Total {seats.get('total_used')} · "
+            f"{seats.get('first_month')} → {seats.get('last_month')} · "
+            f"{seats.get('months_with_usage')} meses com uso"
+        )
+        for i, h in enumerate(
+            [
+                "Mês", "Revo Seats used", "Cumulativo",
+                "Faturamento", "% do faturamento",
+            ],
+            1,
+        ):
+            ws_rs.cell(5, i, h)
+        for r_i, m in enumerate(sorted((seats.get("monthly") or {})), 6):
+            b = seats["monthly"][m]
+            if not b.get("used") and m > (seats.get("last_month") or ""):
+                continue
+            vals = [
+                m,
+                b.get("used"),
+                b.get("cumulative"),
+                b.get("faturamento"),
+                b.get("pct_of_faturamento"),
+            ]
+            for c, v in enumerate(vals, 1):
+                ws_rs.cell(r_i, c, v if v is not None else None)
 
     ws_rec = wb.create_sheet("Recorrência LTM")
     ws_rec["A1"] = "REVO · Recorrência LTM"

@@ -49,8 +49,9 @@ Outputs are written next to the script (gitignored): `index.html`, `data.js`, `r
 | Horas SBGR / Resto / Shuttle | Salesforce `TempoMissao__c` (min÷60), voos Executado |
 | Base de vendas | `Servico.ValorPago__c` via Empenho, no mês do voo |
 | Corporate mobility % | Conta Faturamento PJ / faturamento |
-| Subscription % | `rcm-used.xlsx` linha 33 (Total Used) / faturamento do mês |
+| Revo Seats used | `rcm-used.xlsx` linha 33 (Total Used), série desde 2025 |
+| Subscription % | Revo Seats used / faturamento do mês |
 
-Coloque `tools/kpi-dashboard/rcm-used.xlsx` (ou o JSON gerado `rcm_used.json`) para alimentar subscription %.
+Coloque `tools/kpi-dashboard/rcm-used.xlsx` (ou `rcm_used.json`) para alimentar Revo Seats.
 
-Excel: abas **Glossário**, **Horas SBGR**, **Base de vendas**, **Recorrência LTM**, **Freq LTM Mensal**, **Mensal**.
+Excel: abas **Glossário**, **Horas SBGR**, **Base de vendas**, **Revo Seats**, **Recorrência LTM**, **Freq LTM Mensal**, **Mensal**.
