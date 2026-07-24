@@ -226,23 +226,14 @@ GLOSSARY = (
         "Voos Salesforce com Tipo contendo Shuttle (ShuttleSeat / ShuttleFullCabin).",
     ),
     (
-        "Valor pago (voo)",
-        "Soma de Servico.ValorPago__c por Empenho no mês do voo (DiaVoo/DataHoraVoo). "
-        "Mesma base do relatório Financeiro · Validação Weekly KPI.",
-    ),
-    (
-        "Receita reconhecida",
-        "Soma de Empenho.ValorReconhecimentoReceita__c no mês do voo. "
-        "Campo populado a partir de ~mar/2026; meses anteriores ficam zerados.",
+        "Base de vendas (faturamento)",
+        "Soma de Servico.ValorPago__c via Empenho no mês do voo "
+        "(relatório Financeiro · Validação Weekly KPI).",
     ),
     (
         "Corporate mobility %",
-        "% sobre a receita reconhecida (ou valor pago) cuja Conta Faturamento "
-        "(fallback Comprador) é Cliente - Pessoa Jurídica.",
-    ),
-    (
-        "Subscription (Revo Seats)",
-        "Empenhos cujo Pagamento tem Record Type = Voucher RevoSeats.",
+        "% do faturamento cuja Conta Faturamento (fallback Comprador) "
+        "é Cliente - Pessoa Jurídica.",
     ),
 )
 
@@ -828,36 +819,21 @@ HTML = r'''<!DOCTYPE html>
   </section>
 
   <section id="sfRevenueSection" hidden>
-    <h2>Faturamento · receita reconhecida · corporate · subscription</h2>
-    <p class="help" id="sfRevenueHelp"></p>
+    <h2>Base de vendas · corporate mobility</h2>
+    <p class="help" id="sfRevenueHelp">Evolução do faturamento (mês do voo) e quanto disso é corporate mobility (PJ).</p>
     <div class="kpis" id="sfRevenueKpis"></div>
-    <div class="table-wrap" style="margin-bottom:14px">
-      <table>
-        <thead>
-          <tr>
-            <th>Snapshot LTM</th>
-            <th class="num">Valor pago</th>
-            <th class="num">Reconhecido</th>
-            <th class="num">Corp % (rec)</th>
-            <th class="num">Sub % (rec)</th>
-            <th class="num">N empenhos</th>
-          </tr>
-        </thead>
-        <tbody id="sfRevSnapBody"></tbody>
-      </table>
+    <div class="charts" style="margin:14px 0">
+      <div class="box"><h3>Evolução da base de vendas</h3><canvas id="chartSales" height="240"></canvas></div>
+      <div class="box"><h3>Corporate mobility % do faturamento</h3><canvas id="chartCorp" height="240"></canvas></div>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Mês (voo)</th>
-            <th class="num">Valor pago</th>
-            <th class="num">Reconhecido</th>
+            <th>Mês</th>
+            <th class="num">Faturamento</th>
             <th class="num">Corporate PJ</th>
-            <th class="num">Corp %</th>
-            <th class="num">Voucher RevoSeats</th>
-            <th class="num">Sub %</th>
-            <th class="num">N</th>
+            <th class="num">Corporate %</th>
           </tr>
         </thead>
         <tbody id="sfRevMonthBody"></tbody>
@@ -1073,44 +1049,29 @@ if (sf && sf.hours) {
 if (sf && sf.revenue) {
   document.getElementById('sfRevenueSection').hidden = false;
   const rev = sf.revenue;
-  const def = rev.definition || {};
-  document.getElementById('sfRevenueHelp').textContent =
-    `Fonte: ${def.source || '—'} · Valor pago: ${def.valor_pago || '—'} · Reconhecido: ${def.recognized || '—'} · Corporate: ${def.corporate_mobility || '—'} · Subscription: ${def.subscription || '—'}`;
   const snap = rev.snapshots?.ltm_2026_06 || {};
+  const corpPct = snap.corporate_pj_pago_pct ?? snap.corporate_pj_pct;
+  const corpAmt = snap.corporate_pj_pago ?? snap.corporate_pj;
   document.getElementById('sfRevenueKpis').innerHTML = [
-    ['LTM Jun/2026 valor pago', fmtBRL(snap.valor_pago), `${fmtN(snap.n)} empenhos · mês do voo`],
-    ['LTM Jun/2026 reconhecido', fmtBRL(snap.recognized), 'Empenho.ValorReconhecimentoReceita (desde ~mar/2026)'],
-    ['Corporate mobility (rec)', `${snap.corporate_pj_pct ?? '—'}%`, fmtBRL(snap.corporate_pj)],
-    ['Subscription Voucher RevoSeats', `${snap.subscription_pct ?? '—'}%`, fmtBRL(snap.subscription_revo_seats)],
+    ['Faturamento LTM Jun/2026', fmtBRL(snap.valor_pago), 'base de vendas · mês do voo'],
+    ['Corporate mobility', `${corpPct ?? '—'}%`, fmtBRL(corpAmt) + ' do faturamento LTM'],
   ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v}</strong><span class="sub">${sub||''}</span></article>`).join('');
-  const snaps = [
-    ['Jun/2026 LTM', rev.snapshots?.ltm_2026_06],
-    ['Dez/2025 LTM', rev.snapshots?.ltm_2025_12],
-    ['Dez/2024 LTM', rev.snapshots?.ltm_2024_12],
-  ];
-  document.getElementById('sfRevSnapBody').innerHTML = snaps.map(([lab, s]) => s ? `
-    <tr>
-      <td>${lab}</td>
-      <td class="num">${fmtBRL(s.valor_pago)}</td>
-      <td class="num">${fmtBRL(s.recognized)}</td>
-      <td class="num">${s.corporate_pj_pct ?? '—'}%</td>
-      <td class="num">${s.subscription_pct ?? '—'}%</td>
-      <td class="num">${fmtN(s.n)}</td>
-    </tr>` : '').join('');
   const rm = Object.keys(rev.monthly || {}).sort();
-  document.getElementById('sfRevMonthBody').innerHTML = rm.map(m => {
+  const salesRows = rm.map(m => {
     const r = rev.monthly[m];
-    return `<tr>
-      <td>${m}</td>
-      <td class="num">${fmtBRL(r.valor_pago)}</td>
-      <td class="num">${fmtBRL(r.recognized)}</td>
-      <td class="num">${fmtBRL(r.corporate_pj)}</td>
-      <td class="num">${r.corporate_pj_pct ?? '—'}%</td>
-      <td class="num">${fmtBRL(r.subscription_revo_seats)}</td>
-      <td class="num">${r.subscription_pct ?? '—'}%</td>
-      <td class="num">${fmtN(r.n)}</td>
-    </tr>`;
-  }).join('');
+    const fat = r.valor_pago;
+    const corp = r.corporate_pj_pago ?? r.corporate_pj;
+    const pct = r.corporate_pj_pago_pct ?? r.corporate_pj_pct;
+    return { m, fat, corp, pct };
+  });
+  document.getElementById('sfRevMonthBody').innerHTML = salesRows.map(r => `
+    <tr>
+      <td>${r.m}</td>
+      <td class="num">${fmtBRL(r.fat)}</td>
+      <td class="num">${fmtBRL(r.corp)}</td>
+      <td class="num">${r.pct ?? '—'}%</td>
+    </tr>`).join('');
+  window.__salesRows = salesRows;
 }
 
 const gaps = monthly.filter(r => r.data_gap);
@@ -1309,6 +1270,20 @@ line('chartNew', [{
   data: active.map(r => r.new_customers),
   borderColor: '#0b6b52', tension: 0.25, pointRadius: 3,
 }], { labels: active.map(r => r.month), beginAtZero: true, legend: false });
+
+if (window.__salesRows && window.__salesRows.length) {
+  const sr = window.__salesRows;
+  line('chartSales', [{
+    label: 'Faturamento',
+    data: sr.map(r => r.fat),
+    borderColor: '#0b6b52', backgroundColor: 'rgba(11,107,82,0.12)', fill: true, tension: 0.25, pointRadius: 3,
+  }], { labels: sr.map(r => r.m), beginAtZero: true, legend: false });
+  line('chartCorp', [{
+    label: 'Corporate %',
+    data: sr.map(r => r.pct),
+    borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.12)', fill: true, tension: 0.25, pointRadius: 3,
+  }], { labels: sr.map(r => r.m), pct: true, beginAtZero: true, legend: false });
+}
 </script>
 </body>
 </html>
@@ -1380,60 +1355,35 @@ def write_excel(data: dict, path: Path) -> None:
                 ws_h.cell(r_i, c, v)
 
     if sf.get("revenue"):
-        ws_rv = wb.create_sheet("Faturamento SF")
-        ws_rv["A1"] = "Faturamento · receita reconhecida · corporate · subscription"
+        ws_rv = wb.create_sheet("Base de vendas")
+        ws_rv["A1"] = "Base de vendas · corporate mobility"
         ws_rv["A1"].font = Font(size=14, bold=True)
-        dfn = sf["revenue"].get("definition") or {}
         ws_rv["A2"] = (
-            f"Fonte: {dfn.get('source')} · Valor pago: {dfn.get('valor_pago')} · "
-            f"Reconhecido: {dfn.get('recognized')} · "
-            f"Corporate: {dfn.get('corporate_mobility')} · "
-            f"Subscription: {dfn.get('subscription')}"
+            "Faturamento = Servico.ValorPago no mês do voo · "
+            "Corporate % = Conta Faturamento Pessoa Jurídica / faturamento"
         )
-        ws_rv["A4"] = "Snapshots LTM"
+        snap = (sf["revenue"].get("snapshots") or {}).get("ltm_2026_06") or {}
+        ws_rv["A4"] = "LTM Jun/2026"
         ws_rv["A4"].font = Font(bold=True)
+        ws_rv["A5"] = "Faturamento"
+        ws_rv["B5"] = snap.get("valor_pago")
+        ws_rv["A6"] = "Corporate mobility %"
+        ws_rv["B6"] = snap.get("corporate_pj_pago_pct")
+        ws_rv["C6"] = snap.get("corporate_pj_pago")
+        ws_rv["A8"] = "Mensal"
+        ws_rv["A8"].font = Font(bold=True)
         for i, h in enumerate(
-            [
-                "Snapshot", "Valor pago", "Reconhecido", "Corporate PJ", "Corp %",
-                "Voucher RevoSeats", "Sub %", "N empenhos",
-            ],
+            ["Mês", "Faturamento", "Corporate PJ", "Corporate %"],
             1,
         ):
-            ws_rv.cell(5, i, h)
-        for r_i, (lab, key) in enumerate(
-            [
-                ("Jun/2026 LTM", "ltm_2026_06"),
-                ("Dez/2025 LTM", "ltm_2025_12"),
-                ("Dez/2024 LTM", "ltm_2024_12"),
-            ],
-            6,
-        ):
-            snap = (sf["revenue"].get("snapshots") or {}).get(key) or {}
-            vals = [
-                lab, snap.get("valor_pago"), snap.get("recognized"),
-                snap.get("corporate_pj"), snap.get("corporate_pj_pct"),
-                snap.get("subscription_revo_seats"), snap.get("subscription_pct"),
-                snap.get("n"),
-            ]
-            for c, v in enumerate(vals, 1):
-                ws_rv.cell(r_i, c, v if v is not None else "—")
-        ws_rv["A10"] = "Mensal (mês do voo)"
-        ws_rv["A10"].font = Font(bold=True)
-        for i, h in enumerate(
-            [
-                "Mês", "Valor pago", "Reconhecido", "Corporate PJ", "Corp %",
-                "Voucher RevoSeats", "Sub %", "N",
-            ],
-            1,
-        ):
-            ws_rv.cell(11, i, h)
-        for r_i, m in enumerate(sorted((sf["revenue"].get("monthly") or {})), 12):
+            ws_rv.cell(9, i, h)
+        for r_i, m in enumerate(sorted((sf["revenue"].get("monthly") or {})), 10):
             r = sf["revenue"]["monthly"][m]
             vals = [
-                m, r.get("valor_pago"), r.get("recognized"),
-                r.get("corporate_pj"), r.get("corporate_pj_pct"),
-                r.get("subscription_revo_seats"), r.get("subscription_pct"),
-                r.get("n"),
+                m,
+                r.get("valor_pago"),
+                r.get("corporate_pj_pago"),
+                r.get("corporate_pj_pago_pct"),
             ]
             for c, v in enumerate(vals, 1):
                 ws_rv.cell(r_i, c, v if v is not None else None)
