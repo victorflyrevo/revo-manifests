@@ -235,6 +235,11 @@ GLOSSARY = (
         "% do faturamento cuja Conta Faturamento (fallback Comprador) "
         "é Cliente - Pessoa Jurídica.",
     ),
+    (
+        "Subscription %",
+        "% do faturamento mensal vindo de subscription used "
+        "(rcm-used.xlsx · linha Total Used per month).",
+    ),
 )
 
 
@@ -796,12 +801,12 @@ HTML = r'''<!DOCTYPE html>
   </section>
 
   <section id="sfRevenueSection" hidden>
-    <h2>Base de vendas · corporate mobility</h2>
-    <p class="help" id="sfRevenueHelp">Evolução do faturamento (mês do voo) e quanto disso é corporate mobility (PJ).</p>
+    <h2>Base de vendas · corporate · subscription</h2>
+    <p class="help" id="sfRevenueHelp">Evolução do faturamento (mês do voo), % corporate mobility (PJ) e % subscription used (rcm-used).</p>
     <div class="kpis" id="sfRevenueKpis"></div>
     <div class="charts" style="margin:14px 0">
       <div class="box"><h3>Evolução da base de vendas</h3><canvas id="chartSales" height="240"></canvas></div>
-      <div class="box"><h3>Corporate mobility % do faturamento</h3><canvas id="chartCorp" height="240"></canvas></div>
+      <div class="box"><h3>% do faturamento</h3><canvas id="chartMix" height="240"></canvas></div>
     </div>
     <div class="table-wrap">
       <table>
@@ -809,8 +814,9 @@ HTML = r'''<!DOCTYPE html>
           <tr>
             <th>Mês</th>
             <th class="num">Faturamento</th>
-            <th class="num">Corporate PJ</th>
             <th class="num">Corporate %</th>
+            <th class="num">Subscription used</th>
+            <th class="num">Subscription %</th>
           </tr>
         </thead>
         <tbody id="sfRevMonthBody"></tbody>
@@ -1053,18 +1059,26 @@ if (sf && sf.revenue) {
   document.getElementById('sfRevenueKpis').innerHTML = [
     ['Faturamento LTM Jun/2026', fmtBRL(snap.valor_pago), 'base de vendas · mês do voo'],
     ['Corporate mobility', `${snap.corporate_pj_pct ?? '—'}%`, fmtBRL(snap.corporate_pj) + ' do faturamento LTM'],
+    ['Subscription', `${snap.subscription_pct ?? '—'}%`, fmtBRL(snap.subscription_used) + ' used / faturamento LTM'],
   ].map(([l,v,sub]) => `<article><span class="label">${l}</span><strong>${v}</strong><span class="sub">${sub||''}</span></article>`).join('');
   const rm = Object.keys(rev.monthly || {}).sort();
   const salesRows = rm.map(m => {
     const r = rev.monthly[m];
-    return { m, fat: r.valor_pago, corp: r.corporate_pj, pct: r.corporate_pj_pct };
+    return {
+      m,
+      fat: r.valor_pago,
+      corpPct: r.corporate_pj_pct,
+      sub: r.subscription_used,
+      subPct: r.subscription_pct,
+    };
   });
   document.getElementById('sfRevMonthBody').innerHTML = salesRows.map(r => `
     <tr>
       <td>${r.m}</td>
       <td class="num">${fmtBRL(r.fat)}</td>
-      <td class="num">${fmtBRL(r.corp)}</td>
-      <td class="num">${r.pct ?? '—'}%</td>
+      <td class="num">${r.corpPct ?? '—'}%</td>
+      <td class="num">${fmtBRL(r.sub)}</td>
+      <td class="num">${r.subPct ?? '—'}%</td>
     </tr>`).join('');
   window.__salesRows = salesRows;
 }
@@ -1273,11 +1287,18 @@ if (window.__salesRows && window.__salesRows.length) {
     data: sr.map(r => r.fat),
     borderColor: '#0b6b52', backgroundColor: 'rgba(11,107,82,0.12)', fill: true, tension: 0.25, pointRadius: 3,
   }], { labels: sr.map(r => r.m), beginAtZero: true, legend: false });
-  line('chartCorp', [{
-    label: 'Corporate %',
-    data: sr.map(r => r.pct),
-    borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.12)', fill: true, tension: 0.25, pointRadius: 3,
-  }], { labels: sr.map(r => r.m), pct: true, beginAtZero: true, legend: false });
+  line('chartMix', [
+    {
+      label: 'Corporate %',
+      data: sr.map(r => r.corpPct),
+      borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.08)', fill: false, tension: 0.25, pointRadius: 3,
+    },
+    {
+      label: 'Subscription %',
+      data: sr.map(r => r.subPct),
+      borderColor: '#2f5d9f', backgroundColor: 'rgba(47,93,159,0.08)', fill: false, tension: 0.25, pointRadius: 3,
+    },
+  ], { labels: sr.map(r => r.m), pct: true, beginAtZero: true, legend: true });
 }
 </script>
 </body>
@@ -1285,15 +1306,131 @@ if (window.__salesRows && window.__salesRows.length) {
 '''
 
 
+def load_rcm_used() -> dict[str, float]:
+    """Monthly subscription used from rcm-used.xlsx row 'Total Used per month'."""
+    from datetime import date, datetime
+
+    xlsx = OUT / "rcm-used.xlsx"
+    if xlsx.exists():
+        from openpyxl import load_workbook
+
+        ws = load_workbook(xlsx, data_only=True).active
+        months: dict[str, float] = {}
+        for c in range(3, (ws.max_column or 0) + 1):
+            header = ws.cell(3, c).value
+            value = ws.cell(33, c).value
+            if header is None:
+                continue
+            if isinstance(header, (datetime, date)):
+                key = header.strftime("%Y-%m")
+            else:
+                key = str(header)[:7]
+            months[key] = round(float(value or 0), 2)
+        (OUT / "rcm_used.json").write_text(
+            json.dumps(
+                {
+                    "source": "rcm-used.xlsx",
+                    "metric": "Total Used per month (subscription)",
+                    "row": 33,
+                    "monthly": months,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return months
+
+    path = OUT / "rcm_used.json"
+    if path.exists():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            k: float(v)
+            for k, v in (payload.get("monthly") or {}).items()
+        }
+    return {}
+
+
+def merge_subscription_used(sf: dict, rcm: dict[str, float]) -> dict:
+    """Attach subscription used + % of monthly faturamento into revenue payload."""
+    rev = sf.get("revenue")
+    if not rev:
+        return sf
+    monthly = rev.get("monthly") or {}
+    # Ensure months that only exist in RCM still appear when we have faturamento later
+    for m, used in rcm.items():
+        if m not in monthly and used:
+            monthly[m] = {
+                "valor_pago": 0.0,
+                "n": 0,
+                "n_servicos": 0,
+                "corporate_pj": 0.0,
+                "corporate_pj_pct": 0.0,
+            }
+        if m not in monthly:
+            continue
+        fat = float(monthly[m].get("valor_pago") or 0)
+        used_amt = float(used or 0)
+        monthly[m]["subscription_used"] = round(used_amt, 2)
+        monthly[m]["subscription_pct"] = (
+            round(used_amt / fat * 100, 2) if fat else None
+        )
+
+    def ltm_sub(end: str, months: int = 12) -> dict:
+        y, mo = map(int, end.split("-"))
+        keys = []
+        for _ in range(months):
+            keys.append(f"{y:04d}-{mo:02d}")
+            mo -= 1
+            if mo == 0:
+                mo = 12
+                y -= 1
+        fat = corp = sub = 0.0
+        n = 0
+        for k in keys:
+            b = monthly.get(k) or {}
+            fat += float(b.get("valor_pago") or 0)
+            corp += float(b.get("corporate_pj") or 0)
+            sub += float(b.get("subscription_used") or 0)
+            n += int(b.get("n") or 0)
+        return {
+            "end": end,
+            "valor_pago": round(fat, 2),
+            "n": n,
+            "corporate_pj": round(corp, 2),
+            "corporate_pj_pct": round(corp / fat * 100, 2) if fat else 0.0,
+            "subscription_used": round(sub, 2),
+            "subscription_pct": round(sub / fat * 100, 2) if fat else None,
+        }
+
+    rev["monthly"] = monthly
+    rev.setdefault("definition", {})
+    rev["definition"]["subscription"] = (
+        "rcm-used.xlsx linha 33 'Total Used per month' / faturamento do mês"
+    )
+    rev["snapshots"] = {
+        "ltm_2026_06": ltm_sub("2026-06"),
+        "ltm_2025_12": ltm_sub("2025-12"),
+        "ltm_2024_12": ltm_sub("2024-12"),
+    }
+    sf["revenue"] = rev
+    return sf
+
+
 def load_salesforce_kpis() -> Optional[dict]:
     path = OUT / "salesforce_kpis.json"
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        sf = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         print(f"Could not load salesforce_kpis.json: {exc}")
         return None
+    rcm = load_rcm_used()
+    if rcm:
+        sf = merge_subscription_used(sf, rcm)
+        print(f"Merged subscription used from RCM ({len(rcm)} months)")
+    return sf
 
 
 def write_excel(data: dict, path: Path) -> None:
@@ -1351,11 +1488,12 @@ def write_excel(data: dict, path: Path) -> None:
 
     if sf.get("revenue"):
         ws_rv = wb.create_sheet("Base de vendas")
-        ws_rv["A1"] = "Base de vendas · corporate mobility"
+        ws_rv["A1"] = "Base de vendas · corporate · subscription"
         ws_rv["A1"].font = Font(size=14, bold=True)
         ws_rv["A2"] = (
             "Faturamento = Servico.ValorPago no mês do voo · "
-            "Corporate % = Conta Faturamento Pessoa Jurídica / faturamento"
+            "Corporate % = Conta Faturamento PJ / faturamento · "
+            "Subscription % = rcm-used Total Used / faturamento"
         )
         snap = (sf["revenue"].get("snapshots") or {}).get("ltm_2026_06") or {}
         ws_rv["A4"] = "LTM Jun/2026"
@@ -1365,20 +1503,27 @@ def write_excel(data: dict, path: Path) -> None:
         ws_rv["A6"] = "Corporate mobility %"
         ws_rv["B6"] = snap.get("corporate_pj_pct")
         ws_rv["C6"] = snap.get("corporate_pj")
-        ws_rv["A8"] = "Mensal"
-        ws_rv["A8"].font = Font(bold=True)
+        ws_rv["A7"] = "Subscription %"
+        ws_rv["B7"] = snap.get("subscription_pct")
+        ws_rv["C7"] = snap.get("subscription_used")
+        ws_rv["A9"] = "Mensal"
+        ws_rv["A9"].font = Font(bold=True)
         for i, h in enumerate(
-            ["Mês", "Faturamento", "Corporate PJ", "Corporate %"],
+            [
+                "Mês", "Faturamento", "Corporate %",
+                "Subscription used", "Subscription %",
+            ],
             1,
         ):
-            ws_rv.cell(9, i, h)
-        for r_i, m in enumerate(sorted((sf["revenue"].get("monthly") or {})), 10):
+            ws_rv.cell(10, i, h)
+        for r_i, m in enumerate(sorted((sf["revenue"].get("monthly") or {})), 11):
             r = sf["revenue"]["monthly"][m]
             vals = [
                 m,
                 r.get("valor_pago"),
-                r.get("corporate_pj"),
                 r.get("corporate_pj_pct"),
+                r.get("subscription_used"),
+                r.get("subscription_pct"),
             ]
             for c, v in enumerate(vals, 1):
                 ws_rv.cell(r_i, c, v if v is not None else None)

@@ -2,6 +2,7 @@
 *.csv
 *.xlsx
 *.json
+!rcm_used.json
 data.js
 index.html
 __pycache__/
